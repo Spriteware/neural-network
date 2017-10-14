@@ -1,11 +1,10 @@
 
-if (typeof importScripts !== "undefined")
-    importScripts("http://localhost/machinelearning/lib/neural_network.js");
-
 onmessage = function(e) {
-
-    if (!e.data.params || !e.data.weights)
-        throw new NetException("Invalid params or weights in order to build a Neural Network copy", {params: e.data.params, weights: e.data.weights});
+    
+    importScripts(e.data.lib);
+    
+    if (!e.data.url || !e.data.params || !e.data.weights)
+        throw new NetException("Invalid url, params or weights in order to build a Neural Network copy", {url: e.data.url, params: e.data.params, weights: e.data.weights});
 
     var training_data = e.data.training_data;
     var epochs = e.data.epochs;

@@ -1,3 +1,5 @@
+"use strict";
+
 const _SVG_STROKE_WIDTH  = 4;
 const _SVG_CIRCLE_RADIUS = 15;
 const _SVG_CIRCLE_COLOR_DEFAULT = "#ffe5e5";
@@ -13,14 +15,6 @@ const _WEIGHT_VALUE_TOO_HIGH = 10000;
 
 const WORKER_TRAINING_PENDING = 0;
 const WORKER_TRAINING_OVER    = 1;
-
-/*
-    TODO
-    * trainRecurrent la fonction qui ajoute en input la récurrence
-        Créer un type de Network special recurrent ? 
-    * au lieu de faire une nouvelle fonction, passer un objet de paramètre à train. ça sera plus parlant
-*/
-
 
 function randomBiais() {
     return Math.random() * 2 - 1;
@@ -121,6 +115,9 @@ var Network = function(params) {
         weightCurves: undefined
     };
 
+    // Necessary for avoiding problems with Cross Origin (Web Worker)
+    this.libURI = undefined;
+
     this.loadParams(params);
     this.initialize();
 };
@@ -131,12 +128,13 @@ Network.prototype.loadParams = function(params) {
         if (this.hasOwnProperty(key) && this[key] === undefined)
             this[key] = params[key];
 
-    console.log("loaded params", this);    
+    console.log("Loaded params", this);    
 };
 
 Network.prototype.exportParams = function() {
 
     return {
+        libURI: this.libURI,
         lr: this.lr,
         momentum: this.momentum,
         layers: this.layers,
@@ -170,6 +168,9 @@ Network.prototype.importBiais = function(values) {
 
 Network.prototype.initialize = function() {
 
+    if (this.libURI === undefined)
+        throw new NetException("Undefined or invalid lib URI. Necessary for avoiding Cross Origin problems. Use https://domain.com/.../neural-net.js notation", {libURI: this.libURI});
+
     if (this.lr === undefined || this.lr <= 0)
         throw new NetException("Undefined or invalid learning rate", {lr: this.lr});
 
@@ -183,11 +184,11 @@ Network.prototype.initialize = function() {
     var curr_layer = 0;
 
     // Initialization
-    this.nbLayers = this.layers.length;
-    this.layersSum = [];
-    this.layersMul = [];
-    this.neurons = [];
-    this.weights = [];
+    this.nbLayers   = this.layers.length;
+    this.layersSum  = [];
+    this.layersMul  = [];
+    this.neurons    = [];
+    this.weights    = [];
     this.weightsTm1 = [];
 
     // Prepare layers relative computation
@@ -623,10 +624,10 @@ Network.prototype.dropout = function(completely_random, drop_inputs) {
     } 
 };
 
-Network.prototype.train = function(training_data, epochs, visualise) {
+Network.prototype.train = function(training_raw_data, epochs, visualise) {
 
-    if (!training_data)
-        throw new NetException("Invalid training data", {training_data: training_data});
+    if (!training_raw_data && typeof training_raw_data !== "string")
+        throw new NetException("Invalid training raw data (string)", {training_data: training_raw_data});
 
     if (!epochs || isNaN(epochs))
         throw new NetException("Invalid epochs number for training", {epochs: epochs});
@@ -634,8 +635,24 @@ Network.prototype.train = function(training_data, epochs, visualise) {
     if (typeof window.Worker === "undefined" || !window.Worker)
         throw new NetException("Web Worker is not supported by your client. Please upgrade in order to train as background operation");
 
+    // Parse training data
+    var i, l, entry, splitted = training_raw_data.split(";"), training_data = [];
+
+    for (i = 0, l = splitted.length; i < l; i++)
+    {
+        entry = splitted[i].trim().split(":");
+        if (entry.length !== 2)
+            break;
+
+        training_data.push({
+            inputs: entry[0].trim().split(" ").map(parseFloat),
+            targets: entry[1].trim().split(" ").map(parseFloat)
+        });
+    }
+
+    // Create visualisation
     var container, graph, graph_ctx, text_output;
-    var scaled_width, training_size = training_data.length;
+    var scaled_width, training_size = training_raw_data.length;
 
     if (visualise)
     {
@@ -667,7 +684,8 @@ Network.prototype.train = function(training_data, epochs, visualise) {
 
     //////////////// Worker below ////////////////////////////
 
-    var worker = new Worker("http://localhost/machinelearning/lib/worker-training.js");
+    var blob = new Blob(['(' + this.workerHandler.toString() + ')()' ], { type: "text/javascript" });
+    var worker = new Worker(window.URL.createObjectURL(blob));
     var that = this;
 
     worker.addEventListener("message", function(e) {
@@ -759,6 +777,7 @@ Network.prototype.train = function(training_data, epochs, visualise) {
 
     // Start web worker with training data through epochs
     worker.postMessage({
+        lib: this.libURI,
         params: this.exportParams(),
         weights: this.exportWeights(),
         biais: this.exportBiais(),
@@ -767,6 +786,73 @@ Network.prototype.train = function(training_data, epochs, visualise) {
     });
 
     return container || null;
+};
+
+Network.prototype.workerHandler = function() {
+
+    onmessage = function(e) {
+        
+        importScripts(e.data.lib);
+        
+        if (!e.data.lib || !e.data.params || !e.data.weights)
+            throw new NetException("Invalid lib_url, params or weights in order to build a Neural Network copy", {lib: e.data.lib, params: e.data.params, weights: e.data.weights});
+
+        var training_data = e.data.training_data;
+        var epochs = e.data.epochs;
+
+        console.info("Training imported data in processing... Brain copy below:");    
+
+        // Create copy of our current Network
+        var brain = new Network(e.data.params);
+        brain.weights = e.data.weights;
+
+        ///////////////////// Training //////////////////////////////
+
+        var i, curr_epoch, training_size = training_data.length;
+
+        var output_errors = [];
+        var output_errors_mean = 0 ;
+        var sum = 0, global_sum = 0;
+        var mean, global_mean;
+
+        // Feeforward NN
+        for (curr_epoch = 0; curr_epoch < epochs; curr_epoch++)
+        {
+            for (sum = 0, i = 0; i < training_size; i++)
+            {
+                brain.feed(training_data[i].inputs);
+                brain.backpropagate(training_data[i].targets);
+
+                sum += brain.outputError;
+
+                if (epochs <= _CANVAS_GRAPH_EPOCHS_TRESHOLD)
+                    output_errors.push( brain.outputError );
+            }
+            
+            global_sum += sum;
+            mean = sum / training_size; 
+            global_mean = global_sum / ((curr_epoch+1) * training_size); 
+
+            if (epochs > _CANVAS_GRAPH_EPOCHS_TRESHOLD)
+                output_errors.push( Math.sqrt(mean) );
+
+            // Send updates back to real thread
+            self.postMessage({
+                type: WORKER_TRAINING_PENDING,
+                curr_epoch: curr_epoch,
+                output_errors: output_errors,
+                global_mean: global_mean,
+            });
+        }
+
+        console.info("Training done. Gone through all epochs", {epochs: epochs, global_mean: global_mean});
+
+        self.postMessage({
+            type: WORKER_TRAINING_OVER,
+            weights: brain.exportWeights(),
+            biais: brain.exportBiais()
+        });
+    };
 };
 
 Network.prototype.getNeuronIndex = function(layer, n) {
