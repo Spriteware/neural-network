@@ -986,3 +986,53 @@ Network.prototype.static_reluDerivative = function(x) {
 function NetException(message, variables) {
     console.error("ERROR: " + message, variables);
 }
+
+//////////////////////////////////////////////
+
+
+var Utils = {
+    static: {}, // yes, it's just sugar for a good looking in console....
+    trainingData: "",
+    trainingSize: 0,
+    trainingMaxSize: 10000
+};
+
+Utils.static.setTrainingSize = function(size) {
+
+    Utils.trainingMaxSize = size;
+};
+
+Utils.static.addIntoTraining = function(inputs, targets) {
+
+    // Build training data (as string) for future exportation
+    if (Utils.trainingSize <= Utils.trainingMaxSize) {
+        Utils.trainingData += inputs.join(" ") + " : " + targets.join(" ") + "\\\n"; 
+        Utils.trainingSize++;
+        return true;
+    }
+
+    return false;
+};
+
+Utils.static.exportTrainingData = function() {
+
+    console.info("Saving training data...", "Reading 'training_data'");
+
+    var output = document.createElement("textarea");
+    output.setAttribute("disabled", "disabled");
+    output.innerHTML = "var training_data_imported = \"" + Utils.trainingData + "\";";
+    document.body.appendChild( output );
+
+    return "Export completed for " + Utils.trainingSize + " entries.";
+};
+
+Utils.static.getTrainingData = function() {
+    
+    return Utils.trainingData;
+};
+
+Utils.static.clearTrainingData = function() {
+    
+    Utils.trainingData = "";
+};
+    
