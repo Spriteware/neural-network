@@ -13,8 +13,8 @@ const _CANVAS_GRAPH_EPOCHS_TRESHOLD = 50;
 const _ERROR_VALUE_TOO_HIGH  = 100000;
 const _WEIGHT_VALUE_TOO_HIGH = 10000;
 
-const WORKER_TRAINING_PENDING = 0;
-const WORKER_TRAINING_OVER    = 1;
+const _WORKER_TRAINING_PENDING = 0;
+const _WORKER_TRAINING_OVER    = 1;
 
 function randomBiais() {
     return Math.random() * 2 - 1;
@@ -627,7 +627,7 @@ Network.prototype.dropout = function(completely_random, drop_inputs) {
 Network.prototype.train = function(training_raw_data, epochs, visualise) {
 
     if (!training_raw_data && typeof training_raw_data !== "string")
-        throw new NetException("Invalid training raw data (string)", {training_data: training_raw_data});
+        throw new NetException("Invalid training raw data (string)", {training_raw_data: training_raw_data});
 
     if (!epochs || isNaN(epochs))
         throw new NetException("Invalid epochs number for training", {epochs: epochs});
@@ -636,7 +636,8 @@ Network.prototype.train = function(training_raw_data, epochs, visualise) {
         throw new NetException("Web Worker is not supported by your client. Please upgrade in order to train as background operation");
 
     // Parse training data
-    var i, l, entry, splitted = training_raw_data.split(";"), training_data = [];
+    var i, l, entry, splitted = training_raw_data.split(";");
+    var training_data = [], training_size;
 
     for (i = 0, l = splitted.length; i < l; i++)
     {
@@ -650,9 +651,12 @@ Network.prototype.train = function(training_raw_data, epochs, visualise) {
         });
     }
 
+    training_size = training_data.length;
+    console.info("Training: trying to handle %d extracted inputs/targets", training_size);
+
     // Create visualisation
     var container, graph, graph_ctx, text_output;
-    var scaled_width, training_size = training_raw_data.length;
+    var scaled_width;
 
     if (visualise)
     {
@@ -694,7 +698,7 @@ Network.prototype.train = function(training_raw_data, epochs, visualise) {
             throw new NetException("Worker message needs to contain message type (WORKER_TRAINING_X)", {data: e.data});
 
         // Training is over : we display our output_errors curves
-        if (e.data.type === WORKER_TRAINING_PENDING)
+        if (e.data.type === _WORKER_TRAINING_PENDING)
         {
             if (!visualise)
                 return;
@@ -705,6 +709,8 @@ Network.prototype.train = function(training_raw_data, epochs, visualise) {
                 var global_mean = e.data.global_mean;
                 var i, l, o, oel = output_errors.length;
                 var tmp, sum = 0, values = [], moving_averages = [], _AVERAGES_SIZE = Math.round(oel / 10);
+                // var y_window_factor = 1 / global_mean * 0.2;
+                var y_window_factor = 1 / global_mean * 0.05;
 
                 /*
                     Warning! depending on the asked number of epochs, output_errors contains all output_errors
@@ -719,7 +725,7 @@ Network.prototype.train = function(training_raw_data, epochs, visualise) {
         
                 for (o = 0; o < oel; o++) {
         
-                    graph_ctx.lineTo(o, output_errors[o] / global_mean * 0.2);
+                    graph_ctx.lineTo(o, output_errors[o] * y_window_factor);
     
                     // Graphically separate epochs
                     if (epochs < 10 && o > 0 && o % training_size === 0) {
@@ -749,11 +755,11 @@ Network.prototype.train = function(training_raw_data, epochs, visualise) {
                 graph_ctx.strokeStyle = "#42b9f4";
                 graph_ctx.beginPath();
                 graph_ctx.moveTo(0, output_errors[0]);
-                
-                for (i = 0, l = moving_averages.length; i < l; i++)
-                    graph_ctx.lineTo(i, moving_averages[i] / global_mean * 0.2);
 
-                graph_ctx.lineTo(oel, moving_averages[i-1] / global_mean * 0.2);
+                for (i = 0, l = moving_averages.length; i < l; i++)
+                    graph_ctx.lineTo(i, moving_averages[i] * y_window_factor);
+
+                graph_ctx.lineTo(oel, moving_averages[i-1] * y_window_factor);
                 graph_ctx.stroke();
                 graph_ctx.restore();
                 // End display smoother curves
@@ -764,7 +770,7 @@ Network.prototype.train = function(training_raw_data, epochs, visualise) {
         }
 
         // Training is over : we update our weights an biais
-        else if (e.data.type === WORKER_TRAINING_OVER)
+        else if (e.data.type === _WORKER_TRAINING_OVER)
         {
             that.importWeights( e.data.weights );
             that.importBiais( e.data.biais );
@@ -776,7 +782,16 @@ Network.prototype.train = function(training_raw_data, epochs, visualise) {
     });
 
     // Start web worker with training data through epochs
-    worker.postMessage({
+    // worker.postMessage({
+    //     lib: this.libURI,
+    //     params: this.exportParams(),
+    //     weights: this.exportWeights(),
+    //     biais: this.exportBiais(),
+    //     training_data: training_data,
+    //     epochs: epochs
+    // });
+
+    this.disabledWorkerHandler({
         lib: this.libURI,
         params: this.exportParams(),
         weights: this.exportWeights(),
@@ -790,10 +805,12 @@ Network.prototype.train = function(training_raw_data, epochs, visualise) {
 
 Network.prototype.workerHandler = function() {
 
+    // Inside onmessage here's the core training, what will be executed by our webworker
     onmessage = function(e) {
         
-        importScripts(e.data.lib);
-        
+        if (window.importScripts)
+            importScripts(e.data.lib);
+
         if (!e.data.lib || !e.data.params || !e.data.weights)
             throw new NetException("Invalid lib_url, params or weights in order to build a Neural Network copy", {lib: e.data.lib, params: e.data.params, weights: e.data.weights});
 
@@ -838,7 +855,7 @@ Network.prototype.workerHandler = function() {
 
             // Send updates back to real thread
             self.postMessage({
-                type: WORKER_TRAINING_PENDING,
+                type: _WORKER_TRAINING_PENDING,
                 curr_epoch: curr_epoch,
                 output_errors: output_errors,
                 global_mean: global_mean,
@@ -848,11 +865,26 @@ Network.prototype.workerHandler = function() {
         console.info("Training done. Gone through all epochs", {epochs: epochs, global_mean: global_mean});
 
         self.postMessage({
-            type: WORKER_TRAINING_OVER,
+            type: _WORKER_TRAINING_OVER,
             weights: brain.exportWeights(),
             biais: brain.exportBiais()
         });
     };
+
+    return onmessage; // allows fallback for Network.disabledWorkerHandler
+};
+
+Network.prototype.disabledWorkerHandler = function(data) {
+    
+    if (!data)
+        throw new NetException("Invalid data for disabledWorkerHandler", {data: data});
+
+    // Override self.postMessage (doesn't exist outside of webWorker, but we create it here to avoid error and to monitor what's happening)
+    self.postMessage = function(data) {
+        console.log(data);
+    };
+
+    this.workerHandler()({data: data});
 };
 
 Network.prototype.getNeuronIndex = function(layer, n) {
@@ -1006,7 +1038,7 @@ Utils.static.addIntoTraining = function(inputs, targets) {
 
     // Build training data (as string) for future exportation
     if (Utils.trainingSize <= Utils.trainingMaxSize) {
-        Utils.trainingData += inputs.join(" ") + " : " + targets.join(" ") + "\\\n"; 
+        Utils.trainingData += inputs.join(" ") + " : " + targets.join(" ") + ";\\\n"; 
         Utils.trainingSize++;
         return true;
     }
