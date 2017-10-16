@@ -6,37 +6,36 @@ const _SVG_CIRCLE_COLOR_DEFAULT = "#ffe5e5";
 const _SVG_CIRCLE_COLOR_DROPPED = "#c7c7c7";
 const _SVG_MAX_WEIGHTS_DISPLAY_TEXT = 4;
 
-const _CANVAS_GRAPH_WIDTH  = 400;
+const _CANVAS_GRAPH_WIDTH = 400;
 const _CANVAS_GRAPH_HEIGHT = 100;
 const _CANVAS_GRAPH_EPOCHS_TRESHOLD = 50;
 
-const _ERROR_VALUE_TOO_HIGH  = 100000;
+const _ERROR_VALUE_TOO_HIGH = 100000;
 const _WEIGHT_VALUE_TOO_HIGH = 10000;
 
 const _WORKER_TRAINING_PENDING = 0;
-const _WORKER_TRAINING_OVER    = 1;
+const _WORKER_TRAINING_OVER = 1;
 
-function randomBiais() {
-    return Math.random() * 2 - 1;
-}
+/////////////////////////////// Utils - various functions 
 
-function randomWeight() {
-    return Math.random() * 2 - 1;
-}
+var Utils = {
+    static: {}, // yes, it's just sugar for a good looking in console....
+    trainingData: "",
+    trainingSize: 0,
+    trainingMaxSize: 10000
+};
 
-//////////////////////////////////////////////
-
-function tooltipOn(tooltip, event, object) {
+Utils.static.tooltipOn = function(tooltip, event, object) {
     
     tooltip.object = object;
     tooltip.setAttribute("class", "");
     tooltip.style.left = (event.pageX+10) + "px";
     tooltip.style.top = (event.pageY+5) + "px";
 
-    tooltipUpdate(object);
-}
+    Utils.static.tooltipUpdate(object);
+};
 
-function tooltipUpdate(tooltip, object) {
+Utils.static.tooltipUpdate = function(tooltip, object) {
 
     if (typeof object !== "object") {
         tooltip.object = object;
@@ -50,18 +49,58 @@ function tooltipUpdate(tooltip, object) {
             buffer += key + ": " + object[key] + "<br />";
 
     tooltip.innerHTML = buffer;
-}    
+};    
 
-function tooltipOff(tooltip, event, object) {
+Utils.static.tooltipOff = function(tooltip) {
     
     tooltip.object = undefined;
     tooltip.setAttribute("class", "off");
-}
+};
 
-////////////////////////////////////////////
+////////////
 
+Utils.static.setTrainingSize = function(size) {
 
-var Neuron = function(id, layer, biais) {
+    Utils.trainingMaxSize = size;
+};
+
+Utils.static.addIntoTraining = function(inputs, targets) {
+
+    // Build training data (as string) for future exportation
+    if (Utils.trainingSize <= Utils.trainingMaxSize) {
+        Utils.trainingData += inputs.join(" ") + " : " + targets.join(" ") + ";\\\n"; 
+        Utils.trainingSize++;
+        return true;
+    }
+
+    return false;
+};
+
+Utils.static.exportTrainingData = function() {
+
+    console.info("Saving training data...", "Reading 'training_data'");
+
+    var output = document.createElement("textarea");
+    output.setAttribute("disabled", "disabled");
+    output.innerHTML = "var training_data_imported = \"" + Utils.trainingData + "\";";
+    document.body.appendChild( output );
+
+    return "Export completed for " + Utils.trainingSize + " entries.";
+};
+
+Utils.static.getTrainingData = function() {
+    
+    return Utils.trainingData;
+};
+
+Utils.static.clearTrainingData = function() {
+    
+    Utils.trainingData = "";
+};
+
+////////////////////////////////// Neural Network core
+
+function Neuron(id, layer, biais) {
 
     this.id = id;
     this.layer = layer;
@@ -73,11 +112,13 @@ var Neuron = function(id, layer, biais) {
 
     this.activation = undefined;
     this.derivative = undefined;
-};
 
-////////////////////////////////////////////
+    // Input/output weights as cache (because Network.getWeight method is repeated a lot in feed and backprop, it takes time)
+    this.inputWeightsIndex = undefined;
+    this.outputWeightsIndex = undefined;
+}
 
-var Network = function(params) {
+function Network(params) {
 
     // Required variables: lr, layers
     this.lr = undefined; // Learning rate
@@ -100,7 +141,7 @@ var Network = function(params) {
     this.maxWeight = 0;
     this.outputError = 0;
     this.globalError = 0;
-    this.weightsPerNeuron = 0;
+    this.avgWeightsPerNeuron = 0;
 
     // Visualization:
     this.svgVisualization = false;
@@ -120,7 +161,7 @@ var Network = function(params) {
 
     this.loadParams(params);
     this.initialize();
-};
+}
 
 Network.prototype.loadParams = function(params) {
 
@@ -180,7 +221,7 @@ Network.prototype.initialize = function() {
     if (this.layers === undefined || this.layers.length <= 0)
         throw new NetException("Undefined or unsificient layers", {layers: this.layers});
     
-    var i, sum, mul;
+    var i, j, l, sum, mul, tmp;
     var curr_layer = 0;
 
     // Initialization
@@ -199,19 +240,54 @@ Network.prototype.initialize = function() {
         this.layersMul.push(mul + (this.layersMul[i-1] || 0)); 
         // [0] will be 0, Because layerMul is used to know how many weights there is before a layer, and there is no before layer 0
     }
-
-    // Create neurons
+    
+    // Register lenghts
     this.nbNeurons = sum;
-
-    for (i = 0; i < sum; i++) {
-        this.neurons.push( new Neuron(i, i >= this.layersSum[curr_layer] ? ++curr_layer : curr_layer, randomBiais()) );
-        this.neurons[i].activation = this.static_linearActivation;
-        this.neurons[i].derivative = this.static_linearDerivative;
+    this.nbWeights = this.layersMul[this.layersMul.length-1];
+    this.avgWeightsPerNeuron = this.nbWeights / this.nbNeurons;
+    
+    // Create weights    
+    for (i = 0; i < this.nbWeights; i++) {
+        tmp = this.static_randomWeight();
+        this.weights.push(tmp);
+        this.weightsTm1.push(tmp);        
     }
 
-    // Set hidden layer activation functions
-    console.log( "activation", this.hiddenLayerFunction);
+    // Create neurons
+    var neuron, prev_neurons = [], next_neurons = [];
 
+    for (curr_layer = 0, i = 0; i < this.nbNeurons; i++) {
+        neuron = new Neuron(i, i >= this.layersSum[curr_layer] ? ++curr_layer : curr_layer, this.static_randomBiais());
+        neuron.activation = this.static_linearActivation;
+        neuron.derivative = this.static_linearDerivative;
+        this.neurons.push(neuron);
+    }
+
+    // Assign weights index into neuron's cache
+    for (curr_layer = 0, i = 0; i < this.nbNeurons; i++) {
+
+        neuron = this.neurons[i];
+
+        if (neuron.layer !== curr_layer) {
+            curr_layer++;
+            prev_neurons = curr_layer > 0 ? this.getNeuronsInLayer(curr_layer-1) : [];
+            next_neurons = curr_layer < this.nbLayers-1 ? this.getNeuronsInLayer(curr_layer+1) : [];
+        }
+
+        neuron.inputWeightsIndex = Array(prev_neurons.length);        
+        neuron.outputWeightsIndex = Array(next_neurons.length);       
+
+        // Input weights
+        for (j = 0, l = prev_neurons.length; j < l; j++)
+            neuron.inputWeightsIndex[j] = this.getWeightIndex(prev_neurons[j], neuron);
+
+        // Output weights
+        for (j = 0, l = next_neurons.length; j < l; j++)
+             neuron.outputWeightsIndex[j] = this.getWeightIndex(neuron, next_neurons[j]);
+    }
+
+    // Set hidden layer activation functions 
+    // (separated from loop above because we don't want input and output layers to have an activation function -by default)
     switch (this.hiddenLayerFunction)
     {
         case "tanh":
@@ -229,16 +305,6 @@ Network.prototype.initialize = function() {
         default:
             this.setHiddenLayerToActivation(this.static_linearActivation, this.static_linearDerivative);
     }
-
-    // Create weights
-    this.nbWeights = this.layersMul[this.layersMul.length-1];
-
-    for (i = 0; i < this.nbWeights; i++) {
-        this.weights.push( randomWeight() );
-        this.weightsTm1.push( this.weights[0] );        
-    }
-
-    this.weightsPerNeuron = this.nbWeights / this.nbNeurons;
 };
 
 Network.prototype.createVisualization = function() {
@@ -276,17 +342,13 @@ Network.prototype.createVisualization = function() {
         return (neuron.id - (that.layersSum[neuron.layer-1] || 0)) * _MARGIN_Y + _MARGIN_Y / 2;
     }
 
-    function neuronTooltip(event) {
-        tooltipOn( that.DOM.tooltip, event, that.neurons[event.target.getAttribute("data-object")] );
+    function neuronTooltipOn(event) {
+        Utils.static.tooltipOn( that.DOM.tooltip, event, that.neurons[event.target.getAttribute("data-object")] );
     } 
 
-    function weightTooltip(event) {
-        tooltipOn( that.DOM.tooltip, event, that.weights[event.target.getAttribute("data-object")] );
+    function neuronTooltipOff(event) {
+        Utils.static.tooltipOff( that.DOM.tooltip );
     } 
-
-    function neuronNweightTooltipOff(event) {
-        tooltipOff( that.DOM.tooltip, event );
-    }
 
     // Fetching every neuron
     for (i = 0, l = this.neurons.length; i < l; i++)
@@ -309,8 +371,6 @@ Network.prototype.createVisualization = function() {
             DOM_tmp.setAttribute("data-object", index);
             DOM_tmp.setAttribute("d", "M" + x1 + "," + y1 +" C" + (x1 + _MARGIN_X/2) + "," + y1 + " " + (x1 + _MARGIN_X/2) + "," + y2 + " " + x2 + "," + y2);
             DOM_tmp.setAttribute("stroke-width", _SVG_STROKE_WIDTH);
-            DOM_tmp.addEventListener("mousemove", weightTooltip);
-            DOM_tmp.addEventListener("mouseout", neuronNweightTooltipOff);
 
             this.DOM.svg.appendChild(DOM_tmp);
             this.DOM.weightCurves.push(DOM_tmp);
@@ -355,8 +415,8 @@ Network.prototype.createVisualization = function() {
         DOM_tmp.setAttribute("cy", y1);
         DOM_tmp.setAttribute("r", _SVG_CIRCLE_RADIUS);
         DOM_tmp.setAttribute("fill", _SVG_CIRCLE_COLOR_DEFAULT);
-        DOM_tmp.addEventListener("mousemove", neuronTooltip);
-        DOM_tmp.addEventListener("mouseout", neuronNweightTooltipOff);
+        DOM_tmp.addEventListener("mousemove", neuronTooltipOn);
+        DOM_tmp.addEventListener("mouseout", neuronTooltipOff);
 
         this.DOM.svg.appendChild(DOM_tmp);
         this.DOM.neuronsCircles.push(DOM_tmp);
@@ -407,13 +467,13 @@ Network.prototype.visualize = function(inputs, scales) {
     // Update SVG weights
     for (i = 0, l = this.nbWeights; i < l; i++) {
         this.DOM.weightCurves[i].setAttribute("stroke-width", Math.abs(this.weights[i]) / this.maxWeight * _SVG_STROKE_WIDTH);
-        if (this.weightsPerNeuron < _SVG_MAX_WEIGHTS_DISPLAY_TEXT) 
+        if (this.avgWeightsPerNeuron < _SVG_MAX_WEIGHTS_DISPLAY_TEXT) 
             this.DOM.weightTexts[i].innerHTML = this.weights[i].toFixed(4);
     }
 
     // Update tooltip
     if (this.DOM.tooltip.object !== undefined)
-        tooltipUpdate(this.DOM.tooltip, this.DOM.tooltip.object);
+        Utils.static.tooltipUpdate(this.DOM.tooltip, this.DOM.tooltip.object);
 };
 
 Network.prototype.feed = function(inputs, scales) {
@@ -442,16 +502,14 @@ Network.prototype.feed = function(inputs, scales) {
 
         // Computing w1*x1 + ... + wn*xn
         for (sum = 0, n = 0, l = prev_neurons.length; n < l; n++) {
-            if (!prev_neurons[n].dropped)
-                sum += this.getWeight(prev_neurons[n], neuron) * prev_neurons[n].output;
+            if (!prev_neurons[n].dropped) {
+                // sum += this.getWeight(prev_neurons[n], neuron) * prev_neurons[n].output;
+                sum += this.weights[neuron.inputWeightsIndex[n]] * prev_neurons[n].output;
+            }
         }
 
         // Updating output    
         neuron.output = neuron.activation(sum + neuron.biais); 
-
-        // if it's output layer, we apply the scales. Finally we have to do it inside our model if we want the error to detect differencies
-        // if (index >= this.layersSum[this.nbLayers-2])
-        //     neuron.output *= scales[index - this.layersSum[this.nbLayers-2]];
 
         if (!isFinite(neuron.output)) {
             
@@ -460,9 +518,6 @@ Network.prototype.feed = function(inputs, scales) {
             throw new NetException("non finite or too high output", {neuron: neuron});
         }
     }
-
-    // console.log("neurons:");
-    // console.table(this.neurons);
 
     return this.getNeuronsInLayer(this.nbLayers-1);
 };
@@ -588,10 +643,6 @@ Network.prototype.backpropagate = function(targets) {
     }
 
     this.maxWeight = max_weight;
-
-    // console.clear();
-    // console.log( this.weights );
-    // console.table( this.neurons );
 };
 
 Network.prototype.dropout = function(completely_random, drop_inputs) {
@@ -808,7 +859,8 @@ Network.prototype.workerHandler = function() {
     // Inside onmessage here's the core training, what will be executed by our webworker
     onmessage = function(e) {
         
-        if (window.importScripts)
+        console.log( e.data.lib);
+        if (typeof importScripts !== "undefined")
             importScripts(e.data.lib);
 
         if (!e.data.lib || !e.data.params || !e.data.weights)
@@ -978,8 +1030,15 @@ Network.prototype.setHiddenLayerToActivation = function(activation, derivation) 
 };
 
 
-/////////////////////////// Statics activation functions 
+/////////////////////////// Statics network methods & activation functions
 
+Network.prototype.static_randomBiais = function() {
+    return Math.random() * 2 - 1;
+};
+
+Network.prototype.static_randomWeight = function() {
+    return Math.random() * 2 - 1;
+};
 
 Network.prototype.static_linearActivation = function(x) {
     return x;
@@ -1013,58 +1072,8 @@ Network.prototype.static_reluDerivative = function(x) {
     return x < 0 ? 0 : 1;
 };
     
-//////////////////////////////////////////////
+/////////////////////////// Network Exception
 
 function NetException(message, variables) {
     console.error("ERROR: " + message, variables);
 }
-
-//////////////////////////////////////////////
-
-
-var Utils = {
-    static: {}, // yes, it's just sugar for a good looking in console....
-    trainingData: "",
-    trainingSize: 0,
-    trainingMaxSize: 10000
-};
-
-Utils.static.setTrainingSize = function(size) {
-
-    Utils.trainingMaxSize = size;
-};
-
-Utils.static.addIntoTraining = function(inputs, targets) {
-
-    // Build training data (as string) for future exportation
-    if (Utils.trainingSize <= Utils.trainingMaxSize) {
-        Utils.trainingData += inputs.join(" ") + " : " + targets.join(" ") + ";\\\n"; 
-        Utils.trainingSize++;
-        return true;
-    }
-
-    return false;
-};
-
-Utils.static.exportTrainingData = function() {
-
-    console.info("Saving training data...", "Reading 'training_data'");
-
-    var output = document.createElement("textarea");
-    output.setAttribute("disabled", "disabled");
-    output.innerHTML = "var training_data_imported = \"" + Utils.trainingData + "\";";
-    document.body.appendChild( output );
-
-    return "Export completed for " + Utils.trainingSize + " entries.";
-};
-
-Utils.static.getTrainingData = function() {
-    
-    return Utils.trainingData;
-};
-
-Utils.static.clearTrainingData = function() {
-    
-    Utils.trainingData = "";
-};
-    
