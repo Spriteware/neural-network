@@ -686,10 +686,18 @@ Network.prototype.dropout = function(completely_random, drop_inputs) {
     } 
 };
 
-Network.prototype.train = function(training_raw_data, epochs, visualise) {
+Network.prototype.train = function(params) {
 
-    if (!training_raw_data && typeof training_raw_data !== "string")
-        throw new NetException("Invalid training raw data (string)", {training_raw_data: training_raw_data});
+    if (!params)
+        throw new NetException("Invalid parameters object for training", {params: params});
+
+    var raw_data_training = params.data || undefined;
+    var epochs = params.epochs || undefined;
+    var visualise = params.visualise || false;
+    var recurrent = params.recurrent || false;
+
+    if (!raw_data_training && typeof raw_data_training !== "string")
+        throw new NetException("Invalid raw data training (string)", {raw_data_training: raw_data_training});
 
     if (!epochs || isNaN(epochs))
         throw new NetException("Invalid epochs number for training", {epochs: epochs});
@@ -698,7 +706,7 @@ Network.prototype.train = function(training_raw_data, epochs, visualise) {
         throw new NetException("Web Worker is not supported by your client. Please upgrade in order to train as background operation");
 
     // Parse training data
-    var i, l, entry, splitted = training_raw_data.split(";");
+    var i, l, entry, splitted = raw_data_training.split(";");
     var training_data = [], training_size;
 
     for (i = 0, l = splitted.length; i < l; i++)
