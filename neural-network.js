@@ -515,7 +515,7 @@ Network.prototype.feed = function(inputs, scales) {
             
             for (sum = 0, n = 0, l = prev_neurons.length; n < l; n++)
                 console.log(n, this.getWeight(prev_neurons[n], neuron));
-            throw new NetException("non finite or too high output", {neuron: neuron});
+            throw new NetException("Non finite or too high output. Try a smaller learning rate?", {neuron: neuron});
         }
     }
 
@@ -554,7 +554,7 @@ Network.prototype.backpropagate = function(targets) {
         output_error += Math.abs(neuron.error);
 
         if (!isFinite(neuron.error))
-            throw new NetException(" Non finite error on output neuron", {neuron: neuron});
+            throw new NetException("Non finite error on output neuron. Try a smaller learning rate?", {neuron: neuron});
     }
 
     this.outputError = output_error;
@@ -592,11 +592,11 @@ Network.prototype.backpropagate = function(targets) {
         this.globalError += Math.abs(neuron.error); 
         
         if (!isFinite(neuron.error)) {
-            throw new NetException("non finite error", {neuron: neuron});
+            throw new NetException("Non finite error. Try a smaller learning rate?", {neuron: neuron});
         } else if (Math.abs(neuron.error) > _ERROR_VALUE_TOO_HIGH) {
-            console.info("scaling down error to a max", {neuron: neuron, error: neuron.error});
+            console.info("Scaling down error to a max", {neuron: neuron, error: neuron.error});
             neuron.error = neuron.error < 0 ? - _ERROR_VALUE_TOO_HIGH : _ERROR_VALUE_TOO_HIGH;
-            throw new NetException("computed error is too high", {neuron: neuron});
+            throw new NetException("Computed error is too high. Try a smaller learning rate?", {neuron: neuron});
         }
 
         // Updating weights w = w + lr * en * output
@@ -606,16 +606,12 @@ Network.prototype.backpropagate = function(targets) {
                 continue;
 
             if (next_neurons[n].error >= _ERROR_VALUE_TOO_HIGH) {
-                console.info("avoiding backpropagation on weight due to error too high", {error: next_neurons[n].error});
+                console.info("Avoiding backpropagation on weight due to error too high. Try a smaller learning rate?", {error: next_neurons[n].error});
                 continue;
             }
 
             // weight_index = this.getWeightIndex(neuron, next_neurons[n]); 
             weight_index = neuron.outputWeightsIndex[n]; 
-            // var weight_index2 = neuron.outputWeightsIndex[n];
-
-            // if (weight_index !== weight_index2)
-                // console.log( weight_index, weight_index2 );
 
             // We introduce momentum to escape local minimums
             tmp = this.weights[weight_index];
@@ -630,9 +626,9 @@ Network.prototype.backpropagate = function(targets) {
             max_weight = max_weight < Math.abs(weight) ? Math.abs(weight) : max_weight;
 
             if (!isFinite(weight)) {
-                throw new NetException("non finite weight", {neuron: neuron, weight: weight});
+                throw new NetException("Non finite weight. Try a smaller learning rate?", {neuron: neuron, weight: weight});
             } else if (Math.abs(weight) > _WEIGHT_VALUE_TOO_HIGH) {
-                console.info("scaling down weight to a max", {neuron: neuron, weight: weight});
+                console.info("Scaling down weight to a max.", {neuron: neuron, weight: weight});
                 weight = weight < 0 ? - _WEIGHT_VALUE_TOO_HIGH : _WEIGHT_VALUE_TOO_HIGH;
                 // throw new NetException("non finite or too high weight", {neuron: neuron, weight: weight});
             }
@@ -646,7 +642,7 @@ Network.prototype.backpropagate = function(targets) {
         neuron.biais = neuron.biais + this.lr * neuron.error;
 
         if (!isFinite(neuron.biais))
-            throw new NetException("non finite biais", {neuron: neuron});
+            throw new NetException("Non finite biais. Try a smaller learning rate?", {neuron: neuron});
     }
 
     this.maxWeight = max_weight;
@@ -840,16 +836,7 @@ Network.prototype.train = function(training_raw_data, epochs, visualise) {
     });
 
     // Start web worker with training data through epochs
-    // worker.postMessage({
-    //     lib: this.libURI,
-    //     params: this.exportParams(),
-    //     weights: this.exportWeights(),
-    //     biais: this.exportBiais(),
-    //     training_data: training_data,
-    //     epochs: epochs
-    // });
-
-    this.disabledWorkerHandler({
+    worker.postMessage({
         lib: this.libURI,
         params: this.exportParams(),
         weights: this.exportWeights(),
@@ -857,6 +844,15 @@ Network.prototype.train = function(training_raw_data, epochs, visualise) {
         training_data: training_data,
         epochs: epochs
     });
+
+    // this.disabledWorkerHandler({
+    //     lib: this.libURI,
+    //     params: this.exportParams(),
+    //     weights: this.exportWeights(),
+    //     biais: this.exportBiais(),
+    //     training_data: training_data,
+    //     epochs: epochs
+    // });
 
     return container || null;
 };
