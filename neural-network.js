@@ -110,6 +110,7 @@ function Neuron(id, layer, biais) {
     this.output = undefined;
     this.error = undefined;
 
+    this.network = undefined; // link to its network, indispensable for special activation & derivation
     this.activation = undefined;
     this.derivative = undefined;
 
@@ -260,6 +261,7 @@ Network.prototype.initialize = function() {
 
     for (curr_layer = 0, i = 0; i < this.nbNeurons; i++) {
         neuron = new Neuron(i, i >= this.layersSum[curr_layer] ? ++curr_layer : curr_layer, this.static_randomBiais());
+        neuron.network = this;
         neuron.activation = this.static_linearActivation;
         neuron.derivative = this.static_linearDerivative;
         this.neurons.push(neuron);
@@ -1070,7 +1072,7 @@ Network.prototype.static_sigmoidActivation = function(x) {
 };
 
 Network.prototype.static_sigmoidDerivative = function(x) {
-    return 1 / (1 + Math.exp(-x)) * (1 - 1 / (1 + Math.exp(-x)));
+    return this.network.static_sigmoidActivation(x) * (1 - this.network.static_sigmoidActivation(x));
 };
 
 Network.prototype.static_reluActivation = function(x) {
@@ -1082,11 +1084,12 @@ Network.prototype.static_reluDerivative = function(x) {
 };
 
 Network.prototype.static_preluActivation = function(x) {
-    return x < 0 ? this.activationParams.alpha * x : x;
+    return x < 0 ? this.network.activationParams.alpha * x : x;
 };
 
 Network.prototype.static_preluDerivative = function(x) {
-    return x < 0 ? this.activationParams.alpha : 1;
+    console.log( this.network)
+    return x < 0 ? this.network.activationParams.alpha : 1;
 };
     
 /////////////////////////// Network Exception
