@@ -1088,7 +1088,6 @@ Network.prototype.static_preluActivation = function(x) {
 };
 
 Network.prototype.static_preluDerivative = function(x) {
-    console.log( this.network)
     return x < 0 ? this.network.activationParams.alpha : 1;
 };
     
