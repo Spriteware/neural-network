@@ -98,6 +98,27 @@ Utils.static.clearTrainingData = function() {
     Utils.trainingData = "";
 };
 
+Utils.static.parseTrainingData = function(raw) {
+
+    // Parse training data
+    var i, l, entry, splitted = raw.split(";");
+    var training_data = [], training_size;
+
+    for (i = 0, l = splitted.length; i < l; i++)
+    {
+        entry = splitted[i].trim().split(":");
+        if (entry.length !== 2)
+            break;
+
+        training_data.push({
+            inputs: entry[0].trim().split(" ").map(parseFloat),
+            targets: entry[1].trim().split(" ").map(parseFloat)
+        });
+    }
+
+    return training_data;
+};
+
 ////////////////////////////////// Neural Network core
 
 function Neuron(id, layer, biais) {
@@ -131,6 +152,7 @@ function Network(params) {
     this.neurons    = undefined;
     this.weights    = undefined;
     this.weightsTm1 = undefined; // weights at T-1 
+    this.output     = undefined; // current output array
 
     // Caching variables:
     this.layersSum = undefined;
@@ -313,6 +335,12 @@ Network.prototype.initialize = function() {
         default:
             this.setHiddenLayerToActivation(this.static_linearActivation, this.static_linearDerivative);
     }
+
+    // Initialize brain.output to zeros, to avoid training problems
+    i = this.layers[this.nbLayers-1];
+    this.output = Array(i);
+    while (i--)
+        this.output[i] = 0; 
 };
 
 Network.prototype.createVisualization = function() {
@@ -527,7 +555,13 @@ Network.prototype.feed = function(inputs, scales) {
         }
     }
 
-    return this.getNeuronsInLayer(this.nbLayers-1);
+    // Update network output
+    var neurons = this.getNeuronsInLayer(this.nbLayers-1);
+    for (n = 0, l = this.layers[this.nbLayers-1]; n < l; n++)
+        this.output[n] = neurons[n].output;
+
+    // Return output neurons
+    return neurons;
 };
 
 Network.prototype.backpropagate = function(targets) {
@@ -691,13 +725,11 @@ Network.prototype.train = function(params) {
     if (!params)
         throw new NetException("Invalid parameters object for training", {params: params});
 
-    var raw_data_training = params.data || undefined;
+    var raw_training_data = params.data || undefined;
     var epochs = params.epochs || undefined;
-    var visualise = params.visualise || false;
-    var recurrent = params.recurrent || false;
 
-    if (!raw_data_training && typeof raw_data_training !== "string")
-        throw new NetException("Invalid raw data training (string)", {raw_data_training: raw_data_training});
+    if (!raw_training_data && typeof raw_training_data !== "string")
+        throw new NetException("Invalid raw data training (string)", {raw_data_training: raw_training_data});
 
     if (!epochs || isNaN(epochs))
         throw new NetException("Invalid epochs number for training", {epochs: epochs});
@@ -706,29 +738,15 @@ Network.prototype.train = function(params) {
         throw new NetException("Web Worker is not supported by your client. Please upgrade in order to train as background operation");
 
     // Parse training data
-    var i, l, entry, splitted = raw_data_training.split(";");
-    var training_data = [], training_size;
-
-    for (i = 0, l = splitted.length; i < l; i++)
-    {
-        entry = splitted[i].trim().split(":");
-        if (entry.length !== 2)
-            break;
-
-        training_data.push({
-            inputs: entry[0].trim().split(" ").map(parseFloat),
-            targets: entry[1].trim().split(" ").map(parseFloat)
-        });
-    }
-
-    training_size = training_data.length;
+    var training_data = Utils.static.parseTrainingData(raw_training_data);
+    var training_size = training_data.length;
     console.info("Training: trying to handle %d extracted inputs/targets", training_size);
 
     // Create visualisation
     var container, graph, graph_ctx, text_output;
     var scaled_width;
 
-    if (visualise)
+    if (params.visualize === true)
     {
         // Create canvas
         container = document.createElement("div");
@@ -770,7 +788,7 @@ Network.prototype.train = function(params) {
         // Training is over : we display our output_errors curves
         if (e.data.type === _WORKER_TRAINING_PENDING)
         {
-            if (!visualise)
+            if (params.visualize !== true)
                 return;
 
             window.requestAnimationFrame(function() {
@@ -779,8 +797,9 @@ Network.prototype.train = function(params) {
                 var global_mean = e.data.global_mean;
                 var i, l, o, oel = output_errors.length;
                 var tmp, sum = 0, values = [], moving_averages = [], _AVERAGES_SIZE = Math.round(oel / 10);
-                // var y_window_factor = 1 / global_mean * 0.2;
-                var y_window_factor = 1 / global_mean * 0.05;
+                var y_window_factor = global_mean > 0.01 ? 1 / 0.25 : 1 / global_mean * 0.25;
+                // var y_window_factor = 1 / 0.25 * global_mean;
+                // var y_window_factor = 1 / 0.25;
 
                 /*
                     Warning! depending on the asked number of epochs, output_errors contains all output_errors
@@ -845,8 +864,12 @@ Network.prototype.train = function(params) {
             that.importWeights( e.data.weights );
             that.importBiais( e.data.biais );
 
-            // Feeding and bping in order to have updated values (as error) into neurons or others
-            that.feed( training_data[0].inputs );
+            // Feeding and bring in order to have updated values (as error) into neurons or others
+            var inputs = training_data[0].inputs;
+            if (params.recurrent === true)
+                inputs = inputs.concat(that.output);
+
+            that.feed( inputs );
             that.backpropagate( training_data[0].targets );
         }
     });
@@ -857,8 +880,9 @@ Network.prototype.train = function(params) {
         params: this.exportParams(),
         weights: this.exportWeights(),
         biais: this.exportBiais(),
-        training_data: training_data,
-        epochs: epochs
+        epochs: epochs,
+        trainingData: training_data,
+        isRecurrent: params.recurrent || false
     });
 
     // this.disabledWorkerHandler({
@@ -878,15 +902,15 @@ Network.prototype.workerHandler = function() {
     // Inside onmessage here's the core training, what will be executed by our webworker
     onmessage = function(e) {
         
-        console.log( e.data.lib);
         if (typeof importScripts !== "undefined")
             importScripts(e.data.lib);
 
         if (!e.data.lib || !e.data.params || !e.data.weights)
             throw new NetException("Invalid lib_url, params or weights in order to build a Neural Network copy", {lib: e.data.lib, params: e.data.params, weights: e.data.weights});
 
-        var training_data = e.data.training_data;
         var epochs = e.data.epochs;
+        var training_data = e.data.trainingData;
+        var is_recurrent = e.data.isRecurrent;
 
         console.info("Training imported data in processing... Brain copy below:");    
 
@@ -896,8 +920,9 @@ Network.prototype.workerHandler = function() {
 
         ///////////////////// Training //////////////////////////////
 
-        var i, curr_epoch, training_size = training_data.length;
+        var i, n, curr_epoch, training_size = training_data.length;
 
+        var intputs, output_neurons = brain.getNeuronsInLayer(brain.nbLayers-1);
         var output_errors = [];
         var output_errors_mean = 0 ;
         var sum = 0, global_sum = 0;
@@ -908,8 +933,19 @@ Network.prototype.workerHandler = function() {
         {
             for (sum = 0, i = 0; i < training_size; i++)
             {
-                brain.feed(training_data[i].inputs);
-                brain.backpropagate(training_data[i].targets);
+                try {
+                    inputs = training_data[i].inputs;
+                    if (is_recurrent)
+                        inputs = inputs.concat( brain.output );
+    
+                    brain.feed(inputs);
+                    brain.backpropagate(training_data[i].targets);
+                }
+
+                catch (ex) {
+                    console.error(ex);
+                    return;
+                }
 
                 sum += brain.outputError;
 
@@ -976,7 +1012,7 @@ Network.prototype.getNeuron = function(layer, n) {
 
 Network.prototype.getNeuronsInLayer = function(layer) {
 
-    if (layer === undefined || layer < 0 || layer >= this.nbLayers)
+    if ((!layer && layer !== 0) || layer < 0 || layer >= this.nbLayers)
         throw new NetException("Invalid layer access", {layer: layer});
 
     return this.neurons.slice( this.layersSum[layer] - this.layers[layer], this.layersSum[layer]);
