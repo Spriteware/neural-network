@@ -303,6 +303,10 @@ Network.prototype.initialize = function() {
         case "relu":
             this.setHiddenLayerToActivation(this.static_reluActivation, this.static_reluDerivative);
             break;
+
+        case "prelu":
+            this.setHiddenLayerToActivation(this.static_preluActivation, this.static_preluDerivative);
+            break;
         
         default:
             this.setHiddenLayerToActivation(this.static_linearActivation, this.static_linearDerivative);
