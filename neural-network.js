@@ -124,7 +124,8 @@ function Network(params) {
     this.lr = undefined; // Learning rate
     this.momentum = undefined;
     this.layers = undefined;
-    this.hiddenLayerFunction = undefined; // activation function for hidden layer
+    this.activation = undefined; // activation function for hidden layer
+    this.activationParams = undefined;
 
     this.neurons    = undefined;
     this.weights    = undefined;
@@ -179,7 +180,8 @@ Network.prototype.exportParams = function() {
         lr: this.lr,
         momentum: this.momentum,
         layers: this.layers,
-        hiddenLayerFunction: this.hiddenLayerFunction
+        activation: this.activation,
+        activationParams: this.activationParams
     };
 };
 
@@ -288,7 +290,7 @@ Network.prototype.initialize = function() {
 
     // Set hidden layer activation functions 
     // (separated from loop above because we don't want input and output layers to have an activation function -by default)
-    switch (this.hiddenLayerFunction)
+    switch (this.activation)
     {
         case "tanh":
             this.setHiddenLayerToActivation(this.static_tanhActivation, this.static_tanhDerivative);
@@ -1073,6 +1075,14 @@ Network.prototype.static_reluActivation = function(x) {
 
 Network.prototype.static_reluDerivative = function(x) {
     return x < 0 ? 0 : 1;
+};
+
+Network.prototype.static_preluActivation = function(x) {
+    return x < 0 ? this.activationParams.alpha * x : x;
+};
+
+Network.prototype.static_preluDerivative = function(x) {
+    return x < 0 ? this.activationParams.alpha : 1;
 };
     
 /////////////////////////// Network Exception
