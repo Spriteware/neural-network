@@ -264,7 +264,7 @@ Network.prototype.initialize = function() {
     }
 
     // Assign weights index into neuron's cache
-    for (curr_layer = 0, i = 0; i < this.nbNeurons; i++) {
+    for (curr_layer = -1, i = 0; i < this.nbNeurons; i++) {
 
         neuron = this.neurons[i];
 
@@ -580,8 +580,10 @@ Network.prototype.backpropagate = function(targets) {
 
         // Computing w1*e1 + ... + wn*en
         for (sum = 0, n = 0, l = next_neurons.length; n < l; n++) {
-            if (!next_neurons[n].dropped)
-                sum += this.getWeight(neuron, next_neurons[n]) * next_neurons[n].error;
+            if (!next_neurons[n].dropped) {
+                // sum += this.getWeight(neuron, next_neurons[n]) * next_neurons[n].error;
+                sum += this.weights[neuron.outputWeightsIndex[n]] * next_neurons[n].error;
+            }
                 // sum += 1/2 * (this.getWeight(neuron, next_neurons[n]) * next_neurons[n].error) * (this.getWeight(neuron, next_neurons[n]) * next_neurons[n].error);
         }
 
@@ -608,14 +610,19 @@ Network.prototype.backpropagate = function(targets) {
                 continue;
             }
 
-            weight_index = this.getWeightIndex(neuron, next_neurons[n]); 
+            // weight_index = this.getWeightIndex(neuron, next_neurons[n]); 
+            weight_index = neuron.outputWeightsIndex[n]; 
+            // var weight_index2 = neuron.outputWeightsIndex[n];
+
+            // if (weight_index !== weight_index2)
+                // console.log( weight_index, weight_index2 );
 
             // We introduce momentum to escape local minimums
             tmp = this.weights[weight_index];
             weightTm1 = this.weightsTm1[weight_index];
 
             if (this.momentum !== 0)
-                weight = tmp + this.lr * next_neurons[n].error * neuron.output + this.momentum * weightTm1;
+                weight = tmp + this.lr * next_neurons[n].error * neuron.output + this.momentum * weightTm1; // incorrect implementation
             else
                 weight = tmp + this.lr * next_neurons[n].error * neuron.output;
 
