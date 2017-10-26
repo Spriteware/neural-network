@@ -102,7 +102,7 @@ input1 input2 input3 input4 : target1 target2 ;
 input1 input2 input3 input4 : target1 target2 ;
 ```
 
-Usually I save everything into a JS variable, and I put the JS script as a normal script in my page. This is why youo can see this "training_data_imported" variable in the code above.
+Usually I save everything into a JS variable, and I put the JS script as a normal script in my page. This is why you can see this "training_data_imported" variable in the code above.
 ```javascript
 var training_data_imported = "0 0.004012032080192407 0 0.004012032080192407 : 6.123233995736767e-17 -1;\
 0.003901877324468339 0.0009301870879891982 0.00034437034884393647 -0.0009193694393909713 : -0.9726239602750568 -0.23238466364815152;\
