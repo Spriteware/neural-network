@@ -132,7 +132,7 @@ Utils.static.clearTrainingData();
 ## And ?
 
 And that's it. There are no other things to learn about this.
-You can check my other github repo "[machinelearning](https://github.com/Spriteware/machinelearning)" to see more implementations examples. 
+You can check my other github repo "[Spriteware/machinelearning](https://github.com/Spriteware/machinelearning)" to see more implementations examples. 
 
 If you like this work, don't hesitate to send me a friendly message on twitter [@Spriteware](https://twitter.com/Spriteware).
 You can also visit my blog: [franpapers.com](https://franpapers.com)
