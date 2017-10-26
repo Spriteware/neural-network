@@ -12,6 +12,7 @@ The main idea was to do something that can **help to visualize the network and i
 This library was not meant for "distribution" purpose, so it may have thousand bugs and may be not working as you want. **Fork it !**
 
 ## Basic example
+It's simple, there are just way too much comments
 ```javascript
 
 
