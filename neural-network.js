@@ -797,9 +797,10 @@ Network.prototype.train = function(params) {
                 var global_mean = e.data.global_mean;
                 var i, l, o, oel = output_errors.length;
                 var tmp, sum = 0, values = [], moving_averages = [], _AVERAGES_SIZE = Math.round(oel / 10);
-                var y_window_factor = global_mean > 0.01 ? 1 / 0.25 : 1 / global_mean * 0.25;
+                // var y_window_factor = global_mean > 0.01 ? 1 / 0.25 : 1 / global_mean * 0.25;
                 // var y_window_factor = 1 / 0.25 * global_mean;
-                // var y_window_factor = 1 / 0.25;
+                // var y_window_factor = 1 / (global_mean * 1.2);
+                var y_window_factor = 1;
 
                 /*
                     Warning! depending on the asked number of epochs, output_errors contains all output_errors
