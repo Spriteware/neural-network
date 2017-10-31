@@ -727,9 +727,11 @@ Network.prototype.train = function(params) {
 
     var raw_training_data = params.data || undefined;
     var epochs = params.epochs || undefined;
+    var visualise = params.visualise || false;
+    var recurrent = params.recurrent || false;
 
     if (!raw_training_data && typeof raw_training_data !== "string")
-        throw new NetException("Invalid raw data training (string)", {raw_data_training: raw_training_data});
+        throw new NetException("Invalid raw training data (string)", {raw_training_data: raw_training_data});
 
     if (!epochs || isNaN(epochs))
         throw new NetException("Invalid epochs number for training", {epochs: epochs});
