@@ -81,7 +81,6 @@ Utils.static.exportTrainingData = function() {
     console.info("Saving training data...", "Reading 'training_data'");
 
     var output = document.createElement("textarea");
-    output.setAttribute("disabled", "disabled");
     output.innerHTML = "var training_data_imported = \"" + Utils.trainingData + "\";";
     document.body.appendChild( output );
 
@@ -478,7 +477,8 @@ Network.prototype.createVisualization = function() {
     return container;
 };    
 
-Network.prototype.visualize = function(inputs, scales) {
+Network.prototype.visualize = function(inputs, precision) {
+
 
     if (!this.svgVisualization)
         throw new NetException("SVG Visualization is not available", {network: this});
@@ -488,17 +488,15 @@ Network.prototype.visualize = function(inputs, scales) {
 
     var i, l;
     var output_neurons = this.getNeuronsInLayer( this.nbLayers-1 );
-
-    if (scales && scales.length !== output_neurons.length)
-        throw new NetException("Incorrect scales which is not about the same size as outputs", {scales: scales, outputs_neurons: output_neurons});
+    precision = precision || 1;
 
     // Update SVG text inputs
     for (i = 0, l = this.DOM.inputTexts.length; i < l; i++)
-        this.DOM.inputTexts[i].innerHTML = (inputs[i] * (scales ? scales[i] : 1)).toFixed(1);
+        this.DOM.inputTexts[i].innerHTML = inputs[i].toFixed(precision);
 
     // Update SVG text outputs
     for (i = 0, l = this.DOM.outputTexts.length; i < l; i++)
-        this.DOM.outputTexts[i].innerHTML = (output_neurons[i].output * (scales ? scales[i] : 1)).toFixed(1);
+        this.DOM.outputTexts[i].innerHTML = output_neurons[i].output.toFixed(precision);
 
     // Update SVG weights
     for (i = 0, l = this.nbWeights; i < l; i++) {
@@ -512,7 +510,7 @@ Network.prototype.visualize = function(inputs, scales) {
         Utils.static.tooltipUpdate(this.DOM.tooltip, this.DOM.tooltip.object);
 };
 
-Network.prototype.feed = function(inputs, scales) {
+Network.prototype.feed = function(inputs) {
 
     if (!inputs || inputs.length !== this.layers[0])
         throw new NetException("Incorrect inputs", {inputs: inputs, layer: this.layers[0]});
@@ -725,13 +723,13 @@ Network.prototype.train = function(params) {
     if (!params)
         throw new NetException("Invalid parameters object for training", {params: params});
 
-    var raw_training_data = params.data || undefined;
+    var training_data = params.data || undefined;
     var epochs = params.epochs || undefined;
     var visualise = params.visualise || false;
     var recurrent = params.recurrent || false;
 
-    if (!raw_training_data && typeof raw_training_data !== "string")
-        throw new NetException("Invalid raw training data (string)", {raw_training_data: raw_training_data});
+    if (!training_data || training_data.length <= 0)
+        throw new NetException("Invalid raw training data (object)", {training_data: training_data});
 
     if (!epochs || isNaN(epochs))
         throw new NetException("Invalid epochs number for training", {epochs: epochs});
@@ -740,7 +738,6 @@ Network.prototype.train = function(params) {
         throw new NetException("Web Worker is not supported by your client. Please upgrade in order to train as background operation");
 
     // Parse training data
-    var training_data = Utils.static.parseTrainingData(raw_training_data);
     var training_size = training_data.length;
     console.info("Training: trying to handle %d extracted inputs/targets", training_size);
 
@@ -796,6 +793,7 @@ Network.prototype.train = function(params) {
             window.requestAnimationFrame(function() {
     
                 var output_errors = e.data.output_errors;
+                var curr_mean = e.data.curr_mean;
                 var global_mean = e.data.global_mean;
                 var i, l, o, oel = output_errors.length;
                 var tmp, sum = 0, values = [], moving_averages = [], _AVERAGES_SIZE = Math.round(oel / 10);
@@ -857,7 +855,7 @@ Network.prototype.train = function(params) {
                 // End display smoother curves
 
                 // Update output text display
-                text_output.innerHTML = "epoch " + (e.data.curr_epoch+1) + "/" + epochs + " | output error mean: " + global_mean.toFixed(5);
+                text_output.innerHTML = "epoch " + (e.data.curr_epoch+1) + "/" + epochs + " | curr error mean: " + curr_mean.toFixed(5);
             });
         }
 
@@ -874,6 +872,9 @@ Network.prototype.train = function(params) {
 
             that.feed( inputs );
             that.backpropagate( training_data[0].targets );
+
+            // Free space
+            training_data = null;
         }
     });
 
@@ -966,8 +967,9 @@ Network.prototype.workerHandler = function() {
             // Send updates back to real thread
             self.postMessage({
                 type: _WORKER_TRAINING_PENDING,
-                curr_epoch: curr_epoch,
                 output_errors: output_errors,
+                curr_epoch: curr_epoch,
+                curr_mean: mean,
                 global_mean: global_mean,
             });
         }
