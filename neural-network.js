@@ -6,7 +6,7 @@ const _SVG_CIRCLE_COLOR_DEFAULT = "#ffe5e5";
 const _SVG_CIRCLE_COLOR_DROPPED = "#c7c7c7";
 const _SVG_MAX_WEIGHTS_DISPLAY_TEXT = 4;
 
-const _CANVAS_GRAPH_WIDTH = 400;
+const _CANVAS_GRAPH_WIDTH = 800;
 const _CANVAS_GRAPH_HEIGHT = 100;
 const _CANVAS_GRAPH_EPOCHS_TRESHOLD = 50;
 
@@ -15,6 +15,9 @@ const _WEIGHT_VALUE_TOO_HIGH = 10000;
 
 const _WORKER_TRAINING_PENDING = 0;
 const _WORKER_TRAINING_OVER = 1;
+
+const _WEIGHT_RANDOM_COEFF = 1;
+const _BIAIS_RANDOM_COEFF = 1;
 
 /////////////////////////////// Utils - various functions 
 
@@ -125,8 +128,10 @@ function Neuron(id, layer, biais) {
     this.id = id;
     this.layer = layer;
     this.biais = biais || 0;
+    this.biaisMomentum = 0;
     this.dropped = false;
 
+    this.agregation = undefined;
     this.output = undefined;
     this.error = undefined;
 
@@ -141,17 +146,18 @@ function Neuron(id, layer, biais) {
 
 function Network(params) {
 
-    // Required variables: lr, layers
+    // Required variables: lr, mr, layers
+
     this.lr = undefined; // Learning rate
-    this.momentum = undefined;
+    this.mr = undefined; // momentum rate
     this.layers = undefined;
     this.activation = undefined; // activation function for hidden layer
     this.activationParams = undefined;
 
-    this.neurons    = undefined;
-    this.weights    = undefined;
-    this.weightsTm1 = undefined; // weights at T-1 
-    this.output     = undefined; // current output array
+    this.neurons   = undefined;
+    this.weights   = undefined;
+    this.momentums = undefined; // momentums coefficients a t-1
+    this.output    = undefined; // current output array
 
     // Caching variables:
     this.layersSum = undefined;
@@ -200,7 +206,7 @@ Network.prototype.exportParams = function() {
     return {
         libURI: this.libURI,
         lr: this.lr,
-        momentum: this.momentum,
+        mr: this.mr,
         layers: this.layers,
         activation: this.activation,
         activationParams: this.activationParams
@@ -212,11 +218,14 @@ Network.prototype.exportWeights = function() {
 };
 
 Network.prototype.importWeights = function(values) {
+    
     this.weights = values;
+    this.momentums.fill(0);
 };
 
 Network.prototype.exportBiais = function() {
     
+    // We ensure to make a copy and not a reference here
     var values = Array(this.nbNeurons);
 
     for (var i = 0; i < this.nbNeurons; i++)
@@ -235,12 +244,12 @@ Network.prototype.initialize = function() {
 
     if (this.libURI === undefined)
         throw new NetException("Undefined or invalid lib URI. Necessary for avoiding Cross Origin problems. Use https://domain.com/.../neural-net.js notation", {libURI: this.libURI});
-
+ 
     if (this.lr === undefined || this.lr <= 0)
         throw new NetException("Undefined or invalid learning rate", {lr: this.lr});
 
-    if (this.momentum === undefined || this.momentum < 0 || this.momentum > 1)
-        throw new NetException("Undefined or invalid momentum (must be between 0 and 1 both included)", {momentum: this.momentum});
+    if (this.mr === undefined || this.mr < 0 || this.mr > 1)
+        throw new NetException("Undefined or invalid momentum rate (must be between 0 and 1 both included)", {momentum: this.mr});
 
     if (this.layers === undefined || this.layers.length <= 0)
         throw new NetException("Undefined or unsificient layers", {layers: this.layers});
@@ -254,7 +263,7 @@ Network.prototype.initialize = function() {
     this.layersMul  = [];
     this.neurons    = [];
     this.weights    = [];
-    this.weightsTm1 = [];
+    this.momentums  = [];
 
     // Prepare layers relative computation
     for (i = 0, sum = 0, mul = 1; i < this.nbLayers; i++) {
@@ -274,7 +283,7 @@ Network.prototype.initialize = function() {
     for (i = 0; i < this.nbWeights; i++) {
         tmp = this.static_randomWeight();
         this.weights.push(tmp);
-        this.weightsTm1.push(tmp);        
+        this.momentums.push(0);        
     }
 
     // Create neurons
@@ -535,22 +544,16 @@ Network.prototype.feed = function(inputs) {
             prev_neurons = this.getNeuronsInLayer(curr_layer++);
 
         // Computing w1*x1 + ... + wn*xn
-        for (sum = 0, n = 0, l = prev_neurons.length; n < l; n++) {
-            if (!prev_neurons[n].dropped) {
-                // sum += this.getWeight(prev_neurons[n], neuron) * prev_neurons[n].output;
+        for (sum = 0, n = 0, l = prev_neurons.length; n < l; n++)
+            if (!prev_neurons[n].dropped)
                 sum += this.weights[neuron.inputWeightsIndex[n]] * prev_neurons[n].output;
-            }
-        }
 
         // Updating output    
-        neuron.output = neuron.activation(sum + neuron.biais); 
+        neuron.agregation = sum + neuron.biais;
+        neuron.output = neuron.activation(neuron.agregation); 
 
-        if (!isFinite(neuron.output)) {
-            
-            for (sum = 0, n = 0, l = prev_neurons.length; n < l; n++)
-                console.log(n, this.getWeight(prev_neurons[n], neuron));
+        if (!isFinite(neuron.output))
             throw new NetException("Non finite or too high output. Try a smaller learning rate?", {neuron: neuron});
-        }
     }
 
     // Update network output
@@ -569,44 +572,28 @@ Network.prototype.backpropagate = function(targets) {
     if (!targets || !outputs_neurons || targets.length !== outputs_neurons.length)
         throw new NetException("Incoherent targets for current outputs", {targets: targets, outputs_neurons: outputs_neurons});
 
-    // Computing output error
-    // https://fr.wikipedia.org/wiki/R%C3%A9tropropagation_du_gradient
+    // Compute output error
+    // https://en.wikipedia.org/wiki/Backpropagation
 
-    var index, weight_index, n, l, sum, err, grad, weight, weightTm1, tmp, max_weight = 0;
+    var index, weight_index, n, l, sum, weight, old_weight, momentum, tmp, max_weight = 0;
     var output_error = 0, curr_layer = this.nbLayers-1;
     var neuron, next_neurons;
 
     this.globalError = 0;
+    this.outputError = 0;
 
-    // Output layer filling: err = (expected-obtained) - and normalize;
-    for (n = l = outputs_neurons.length; n > 0; n--)
+    // Output layer filling: err = (expected-obtained)
+    for (n = 0, l = outputs_neurons.length; n < l; n++)
     {
-        neuron = outputs_neurons[l - n];
-        grad = neuron.derivative(neuron.output);
-        err = targets[l - n] - neuron.output;
-
-        // var err2 = 1/2 * (targets[l - n] - neuron.output)*(targets[l - n] - neuron.output);
-
-        // console.log( "output err1 & err2", err, err2 );
-        // err = 1/2 * (targets[l - n] - neuron.output) * (targets[l - n] - neuron.output); // ne marche pas du tout
-
-        neuron.error = grad * err;
-        output_error += Math.abs(neuron.error);
+        neuron = outputs_neurons[n];
+        neuron.error = (targets[n] - neuron.output) * neuron.derivative(neuron.agregation);
+        this.outputError += 1/2 * neuron.error * neuron.error;
 
         if (!isFinite(neuron.error))
             throw new NetException("Non finite error on output neuron. Try a smaller learning rate?", {neuron: neuron});
     }
 
-    this.outputError = output_error;
-
-    // if (this.outputError < 0)
-        // throw new NetException("Output error is under 0", {output_error: this.outputError, targets: targets});
-    
-    // if (this.outputError > 1)
-        // console.error("Output error over 1", {output_error: output_error});
-        // throw new NetException("Output error is over 1. Please try to find better targets", {output_error: this.outputError, targets: targets});
-
-    // Fetching neurons from last layer
+    // Fetching neurons from last layer: backpropagate error & update weights
     for (index = this.layersSum[curr_layer-1] - 1; index >= 0; index--)
     {
         neuron = this.neurons[index];
@@ -620,15 +607,12 @@ Network.prototype.backpropagate = function(targets) {
 
         // Computing w1*e1 + ... + wn*en
         for (sum = 0, n = 0, l = next_neurons.length; n < l; n++) {
-            if (!next_neurons[n].dropped) {
-                // sum += this.getWeight(neuron, next_neurons[n]) * next_neurons[n].error;
+            if (!next_neurons[n].dropped)
                 sum += this.weights[neuron.outputWeightsIndex[n]] * next_neurons[n].error;
-            }
-                // sum += 1/2 * (this.getWeight(neuron, next_neurons[n]) * next_neurons[n].error) * (this.getWeight(neuron, next_neurons[n]) * next_neurons[n].error);
         }
 
         // Updating error    
-        neuron.error = sum * neuron.derivative(neuron.output); 
+        neuron.error = sum * neuron.derivative(neuron.agregation); 
         this.globalError += Math.abs(neuron.error); 
         
         if (!isFinite(neuron.error)) {
@@ -645,22 +629,11 @@ Network.prototype.backpropagate = function(targets) {
             if (next_neurons[n].dropped)
                 continue;
 
-            if (next_neurons[n].error >= _ERROR_VALUE_TOO_HIGH) {
-                console.info("Avoiding backpropagation on weight due to error too high. Try a smaller learning rate?", {error: next_neurons[n].error});
-                continue;
-            }
-
-            // weight_index = this.getWeightIndex(neuron, next_neurons[n]); 
             weight_index = neuron.outputWeightsIndex[n]; 
+            old_weight = this.weights[weight_index];
 
             // We introduce momentum to escape local minimums
-            tmp = this.weights[weight_index];
-            weightTm1 = this.weightsTm1[weight_index];
-
-            if (this.momentum !== 0)
-                weight = tmp + this.lr * next_neurons[n].error * neuron.output + this.momentum * weightTm1; // incorrect implementation
-            else
-                weight = tmp + this.lr * next_neurons[n].error * neuron.output;
+            weight = this.weights[weight_index] + (1 - this.mr) * this.lr * next_neurons[n].error * neuron.output + this.mr * this.momentums[weight_index];
 
             // Update maxWeight (for visualisation)
             max_weight = max_weight < Math.abs(weight) ? Math.abs(weight) : max_weight;
@@ -670,16 +643,17 @@ Network.prototype.backpropagate = function(targets) {
             } else if (Math.abs(weight) > _WEIGHT_VALUE_TOO_HIGH) {
                 console.info("Scaling down weight to a max.", {neuron: neuron, weight: weight});
                 weight = weight < 0 ? - _WEIGHT_VALUE_TOO_HIGH : _WEIGHT_VALUE_TOO_HIGH;
-                // throw new NetException("non finite or too high weight", {neuron: neuron, weight: weight});
             }
 
-            // Finally update weights
+            // Finally update weights & momentum
             this.weights[weight_index] = weight;
-            this.weightsTm1[weight_index] = tmp;
+            this.momentums[weight_index] = weight - old_weight;
         }
 
-        // Update biais (really important...)
-        neuron.biais = neuron.biais + this.lr * neuron.error;
+        // Compute biais
+        tmp = neuron.biais;
+        neuron.biais = neuron.biais + (1 - this.mr) * this.lr * neuron.error + this.mr * neuron.biaisMomentum;
+        neuron.biaisMomentum = neuron.biais - tmp;
 
         if (!isFinite(neuron.biais))
             throw new NetException("Non finite biais. Try a smaller learning rate?", {neuron: neuron});
@@ -691,14 +665,16 @@ Network.prototype.backpropagate = function(targets) {
 Network.prototype.dropout = function(completely_random, drop_inputs) {
 
     // Dropping out random neurons allows to push out our network of a bad solution
-    // We usually start from first hidden layer, but could be possible to start from inputs layer
+    // If completely_random === true, the same neuron can be dropped again. 
+    // We usually start from first hidden layer, but could be possible to start from inputs layer if drop_inputs === true
 
     var i, l, n, neurons, shot, p = 0.6;
+    completely_random = typeof completely_random === "undefined" ? true : completely_random;
 
-    for (i = drop_inputs ? 0 : 1; i < this.nbLayers-1; i++)
+    for (i = drop_inputs === true ? 0 : 1; i < this.nbLayers-1; i++)
     {
         neurons = this.getNeuronsInLayer(i);
-        shot = completely_random === true ? undefined : Math.round( Math.random() * (this.layers[i] - 1) );
+        shot = completely_random ? undefined : Math.round( Math.random() * (this.layers[i] - 1) );
 
         for (n = 0, l = neurons.length; n < l; n++)
         {
@@ -793,9 +769,9 @@ Network.prototype.train = function(params) {
             window.requestAnimationFrame(function() {
     
                 var output_errors = e.data.output_errors;
-                var curr_mean = e.data.curr_mean;
+                var epoch_mean = e.data.epoch_mean;
                 var global_mean = e.data.global_mean;
-                var i, l, o, oel = output_errors.length;
+                var i, l, o, oel = output_errors.length, y;
                 var tmp, sum = 0, values = [], moving_averages = [], _AVERAGES_SIZE = Math.round(oel / 10);
                 // var y_window_factor = global_mean > 0.01 ? 1 / 0.25 : 1 / global_mean * 0.25;
                 // var y_window_factor = 1 / 0.25 * global_mean;
@@ -815,7 +791,10 @@ Network.prototype.train = function(params) {
         
                 for (o = 0; o < oel; o++) {
         
-                    graph_ctx.lineTo(o, output_errors[o] * y_window_factor);
+                    // Sqrt helps to see variations in small values
+                    y = Math.sqrt(output_errors[o]); 
+
+                    graph_ctx.lineTo(o, y * y_window_factor); 
     
                     // Graphically separate epochs
                     if (epochs < 10 && o > 0 && o % training_size === 0) {
@@ -826,7 +805,7 @@ Network.prototype.train = function(params) {
                     }
 
                     // Compute moving averages for a smooth curve
-                    tmp = epochs <= _CANVAS_GRAPH_EPOCHS_TRESHOLD ? Math.sqrt(output_errors[o]) || 0 :  output_errors[o] || 0;
+                    tmp = epochs <= _CANVAS_GRAPH_EPOCHS_TRESHOLD ? (Math.sqrt(y) || 0) : (y || 0);
                     values.push(tmp);
                     sum += tmp;
                     moving_averages.push(sum / values.length);
@@ -834,8 +813,9 @@ Network.prototype.train = function(params) {
                     if (o >= _AVERAGES_SIZE)
                         sum -= values.shift(values);
                 }
-        
-                graph_ctx.lineTo(o, 0);
+
+                graph_ctx.lineTo(o, y * y_window_factor); 
+                graph_ctx.lineTo(o, 0); 
                 graph_ctx.closePath();
                 graph_ctx.fill();
                 // End displaying curves
@@ -855,28 +835,36 @@ Network.prototype.train = function(params) {
                 // End display smoother curves
 
                 // Update output text display
-                text_output.innerHTML = "epoch " + (e.data.curr_epoch+1) + "/" + epochs + " | curr error mean: " + curr_mean.toFixed(5);
+                text_output.innerHTML = "epoch " + (e.data.curr_epoch+1) + "/" + epochs + " | curr error mean: " + epoch_mean.toFixed(5);
             });
         }
 
         // Training is over : we update our weights an biais
         else if (e.data.type === _WORKER_TRAINING_OVER)
         {
+            console.error("we receive weights:", hash(e.data.weights));
+
             that.importWeights( e.data.weights );
             that.importBiais( e.data.biais );
+
+            console.error("now we have weights:", hash(that.weights));
+            
 
             // Feeding and bring in order to have updated values (as error) into neurons or others
             var inputs = training_data[0].inputs;
             if (params.recurrent === true)
                 inputs = inputs.concat(that.output);
 
-            that.feed( inputs );
-            that.backpropagate( training_data[0].targets );
+            // that.feed( inputs );
+            // that.backpropagate( training_data[0].targets );
 
             // Free space
             training_data = null;
+            worker.terminate();
         }
     });
+
+    console.error("we send weights", hash(this.weights));
 
     // Start web worker with training data through epochs
     worker.postMessage({
@@ -886,7 +874,8 @@ Network.prototype.train = function(params) {
         biais: this.exportBiais(),
         epochs: epochs,
         trainingData: training_data,
-        isRecurrent: params.recurrent || false
+        isRecurrent: params.recurrent || false,
+        hasDropout: params.dropout || false
     });
 
     // this.disabledWorkerHandler({
@@ -915,12 +904,15 @@ Network.prototype.workerHandler = function() {
         var epochs = e.data.epochs;
         var training_data = e.data.trainingData;
         var is_recurrent = e.data.isRecurrent;
+        var has_dropout = e.data.hasDropout;
 
-        console.info("Training imported data in processing... Brain copy below:");    
+        console.info("Training imported data in processing... options: ", e.data);
+        console.info("Brain copy below:");    
 
         // Create copy of our current Network
         var brain = new Network(e.data.params);
-        brain.weights = e.data.weights;
+        brain.importWeights(e.data.weights);
+        brain.importBiais(e.data.weights);
 
         ///////////////////// Training //////////////////////////////
 
@@ -930,7 +922,11 @@ Network.prototype.workerHandler = function() {
         var output_errors = [];
         var output_errors_mean = 0 ;
         var sum = 0, global_sum = 0;
-        var mean, global_mean;
+        var epoch_mean, global_mean;
+
+        var last_means = [];
+        var last_mean_epochs = 100;
+        var last_means_sum = 0;
 
         // Feeforward NN
         for (curr_epoch = 0; curr_epoch < epochs; curr_epoch++)
@@ -958,18 +954,38 @@ Network.prototype.workerHandler = function() {
             }
             
             global_sum += sum;
-            mean = sum / training_size; 
+            epoch_mean = sum / training_size; 
             global_mean = global_sum / ((curr_epoch+1) * training_size); 
 
+            // test: dynamic dropout
+            if (has_dropout)
+            {
+                last_means_sum += epoch_mean;
+                last_means.push( epoch_mean );
+    
+                if (last_means.length >= last_mean_epochs)
+                {
+                    last_means_sum -= last_means.shift();
+                    var local_mean = last_means_sum / last_mean_epochs; 
+                   
+                    if (local_mean - epoch_mean <= 0.001) {
+                        console.info("EVENT: Dropout at epoch #%d", curr_epoch);
+                        brain.dropout(false);
+                        last_means = [];
+                        last_means_sum = 0;
+                    }
+                }
+            }
+
             if (epochs > _CANVAS_GRAPH_EPOCHS_TRESHOLD)
-                output_errors.push( Math.sqrt(mean) );
+                output_errors.push(epoch_mean);
 
             // Send updates back to real thread
             self.postMessage({
                 type: _WORKER_TRAINING_PENDING,
                 output_errors: output_errors,
                 curr_epoch: curr_epoch,
-                curr_mean: mean,
+                epoch_mean: epoch_mean,
                 global_mean: global_mean,
             });
         }
@@ -981,6 +997,8 @@ Network.prototype.workerHandler = function() {
             weights: brain.exportWeights(),
             biais: brain.exportBiais()
         });
+
+        self.close();
     };
 
     return onmessage; // allows fallback for Network.disabledWorkerHandler
@@ -1063,18 +1081,8 @@ Network.prototype.getWeight = function(from, to) {
     return this.weights[this.getWeightIndex(from, to)];
 };
 
-Network.prototype.getWeightTm1 = function(from, to) {
-    
-    return this.weightsTm1[this.getWeightIndex(from, to)];
-};
-     
 Network.prototype.setWeight = function(from, to, value) {
 
-    this.weights[this.getWeightIndex(from, to)] = value;
-};
-
-Network.prototype.setWeightTm1 = function(from, to, value) {
-    
     this.weights[this.getWeightIndex(from, to)] = value;
 };
 
@@ -1093,11 +1101,11 @@ Network.prototype.setHiddenLayerToActivation = function(activation, derivation) 
 /////////////////////////// Statics network methods & activation functions
 
 Network.prototype.static_randomBiais = function() {
-    return Math.random() * 2 - 1;
+    return (Math.random() * 2 - 1) * _BIAIS_RANDOM_COEFF;
 };
 
 Network.prototype.static_randomWeight = function() {
-    return Math.random() * 2 - 1;
+    return (Math.random() * 2 - 1) * _WEIGHT_RANDOM_COEFF;
 };
 
 Network.prototype.static_linearActivation = function(x) {
@@ -1144,4 +1152,8 @@ Network.prototype.static_preluDerivative = function(x) {
 
 function NetException(message, variables) {
     console.error("ERROR: " + message, variables);
+}
+
+function hash(arr) {
+    return { hash: btoa(arr.join()), size: arr.length };
 }
