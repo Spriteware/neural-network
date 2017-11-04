@@ -16,8 +16,10 @@ const _WEIGHT_VALUE_TOO_HIGH = 10000;
 const _WORKER_TRAINING_PENDING = 0;
 const _WORKER_TRAINING_OVER = 1;
 
+const _AVAILABLE_OPTIMIZERS = ["momentum", "adagrad", "adadelta"];
 const _WEIGHT_RANDOM_COEFF = 1;
 const _BIAIS_RANDOM_COEFF = 1;
+const _EPSILON = 1e-8;
 
 /////////////////////////////// Utils - various functions 
 
@@ -129,6 +131,7 @@ function Neuron(id, layer, biais) {
     this.layer = layer;
     this.biais = biais || 0;
     this.biaisMomentum = 0;
+    this.biaisGradient = 0;
     this.dropped = false;
 
     this.agregation = undefined;
@@ -146,17 +149,20 @@ function Neuron(id, layer, biais) {
 
 function Network(params) {
 
-    // Required variables: lr, mr, layers
+    // Required variables: lr, layers
+    this.params = params;
 
     this.lr = undefined; // Learning rate
-    this.mr = undefined; // momentum rate
     this.layers = undefined;
+    this.optimizer = undefined; // must bin included in _AVAILABLE_OPTIMIZER
+    this.optimizerParams = undefined; // example: momentum rate will be {alpha: X}
     this.activation = undefined; // activation function for hidden layer
     this.activationParams = undefined;
 
     this.neurons   = undefined;
     this.weights   = undefined;
     this.momentums = undefined; // momentums coefficients a t-1
+    this.gradients = undefined; // gradients squared for Adagrad 
     this.output    = undefined; // current output array
 
     // Caching variables:
@@ -203,14 +209,7 @@ Network.prototype.loadParams = function(params) {
 
 Network.prototype.exportParams = function() {
 
-    return {
-        libURI: this.libURI,
-        lr: this.lr,
-        mr: this.mr,
-        layers: this.layers,
-        activation: this.activation,
-        activationParams: this.activationParams
-    };
+    return this.params;
 };
 
 Network.prototype.exportWeights = function() {
@@ -221,6 +220,7 @@ Network.prototype.importWeights = function(values) {
     
     this.weights = values;
     this.momentums.fill(0);
+    this.gradients.fill(0);
 };
 
 Network.prototype.exportBiais = function() {
@@ -236,8 +236,11 @@ Network.prototype.exportBiais = function() {
 
 Network.prototype.importBiais = function(values) {
 
-    for (var i = 0; i < this.nbNeurons; i++)
+    for (var i = 0; i < this.nbNeurons; i++) {
         this.neurons[i].biais = values[i];
+        this.neurons[i].biaisMomentum = 0;
+        this.neurons[i].biaisGradient = 0;
+    }
 };
 
 Network.prototype.initialize = function() {
@@ -248,11 +251,14 @@ Network.prototype.initialize = function() {
     if (this.lr === undefined || this.lr <= 0)
         throw new NetException("Undefined or invalid learning rate", {lr: this.lr});
 
-    if (this.mr === undefined || this.mr < 0 || this.mr > 1)
-        throw new NetException("Undefined or invalid momentum rate (must be between 0 and 1 both included)", {momentum: this.mr});
-
     if (this.layers === undefined || this.layers.length <= 0)
         throw new NetException("Undefined or unsificient layers", {layers: this.layers});
+
+    if (this.optimizer !== undefined && !_AVAILABLE_OPTIMIZERS.includes(this.optimizer))
+        throw new NetException("Invalid optimizer. Available optimizers = ", { available: _AVAILABLE_OPTIMIZERS, optimizer: this.optimizer });
+        
+    if (this.optimizer === "momentum" && (this.optimizerParams === undefined || this.optimizerParams.alpha === undefined || this.optimizerParams.alpha < 0 || this.optimizerParams.alpha > 1))
+        throw new NetException("Undefined or invalid momentum rate (must be between 0 and 1 both included) ", {optimizer: this.optimizer, optimizerParams: this.optimizerParams});
     
     var i, j, l, sum, mul, tmp;
     var curr_layer = 0;
@@ -264,6 +270,7 @@ Network.prototype.initialize = function() {
     this.neurons    = [];
     this.weights    = [];
     this.momentums  = [];
+    this.gradients  = [];
 
     // Prepare layers relative computation
     for (i = 0, sum = 0, mul = 1; i < this.nbLayers; i++) {
@@ -280,16 +287,20 @@ Network.prototype.initialize = function() {
     this.avgWeightsPerNeuron = this.nbWeights / this.nbNeurons;
     
     // Create weights    
-    for (i = 0; i < this.nbWeights; i++) {
+    for (i = 0; i < this.nbWeights; i++)
+    {
         tmp = this.static_randomWeight();
+        
         this.weights.push(tmp);
-        this.momentums.push(0);        
+        this.momentums.push(0);
+        this.gradients.push(0);
     }
 
     // Create neurons
     var neuron, prev_neurons = [], next_neurons = [];
 
-    for (curr_layer = 0, i = 0; i < this.nbNeurons; i++) {
+    for (curr_layer = 0, i = 0; i < this.nbNeurons; i++)
+    {
         neuron = new Neuron(i, i >= this.layersSum[curr_layer] ? ++curr_layer : curr_layer, this.static_randomBiais());
         neuron.network = this;
         neuron.activation = this.static_linearActivation;
@@ -298,8 +309,8 @@ Network.prototype.initialize = function() {
     }
 
     // Assign weights index into neuron's cache
-    for (curr_layer = -1, i = 0; i < this.nbNeurons; i++) {
-
+    for (curr_layer = -1, i = 0; i < this.nbNeurons; i++)
+    {
         neuron = this.neurons[i];
 
         if (neuron.layer !== curr_layer) {
@@ -575,7 +586,7 @@ Network.prototype.backpropagate = function(targets) {
     // Compute output error
     // https://en.wikipedia.org/wiki/Backpropagation
 
-    var index, weight_index, n, l, sum, weight, old_weight, momentum, tmp, max_weight = 0;
+    var index, weight_index, n, l, sum, calc, grad, weight, max_weight = 0;
     var output_error = 0, curr_layer = this.nbLayers-1;
     var neuron, next_neurons;
 
@@ -630,10 +641,15 @@ Network.prototype.backpropagate = function(targets) {
                 continue;
 
             weight_index = neuron.outputWeightsIndex[n]; 
-            old_weight = this.weights[weight_index];
 
-            // We introduce momentum to escape local minimums
-            weight = this.weights[weight_index] + (1 - this.mr) * this.lr * next_neurons[n].error * neuron.output + this.mr * this.momentums[weight_index];
+            // Compute new values wrt gradient optimizer
+            grad = next_neurons[n].error * neuron.output;
+            calc = this.optimizeGradient(this.weights[weight_index], grad, this.momentums[weight_index], this.gradients[weight_index]);
+            
+            // Updates values
+            this.weights[weight_index] = weight = calc.value;
+            this.momentums[weight_index] = calc.momentum;
+            this.gradients[weight_index] = calc.gradients;
 
             // Update maxWeight (for visualisation)
             max_weight = max_weight < Math.abs(weight) ? Math.abs(weight) : max_weight;
@@ -644,22 +660,55 @@ Network.prototype.backpropagate = function(targets) {
                 console.info("Scaling down weight to a max.", {neuron: neuron, weight: weight});
                 weight = weight < 0 ? - _WEIGHT_VALUE_TOO_HIGH : _WEIGHT_VALUE_TOO_HIGH;
             }
-
-            // Finally update weights & momentum
-            this.weights[weight_index] = weight;
-            this.momentums[weight_index] = weight - old_weight;
         }
 
-        // Compute biais
-        tmp = neuron.biais;
-        neuron.biais = neuron.biais + (1 - this.mr) * this.lr * neuron.error + this.mr * neuron.biaisMomentum;
-        neuron.biaisMomentum = neuron.biais - tmp;
+        // Compute biais with gradient optimizer
+        grad = neuron.error;
+        calc = this.optimizeGradient(neuron.biais, grad, neuron.biaisMomentum, neuron.biaisGradient);
+
+        // Updates values
+        neuron.biais = calc.value;
+        neuron.biaisMomentum = calc.momentum;
+        neuron.biaisGradient = calc.gradients;
 
         if (!isFinite(neuron.biais))
             throw new NetException("Non finite biais. Try a smaller learning rate?", {neuron: neuron});
     }
 
     this.maxWeight = max_weight;
+};
+
+Network.prototype.optimizeGradient = function(value, grad, momentum, gradients) {
+
+    var alpha = this.optimizerParams.alpha, old_value = value;
+
+    if (value === undefined || grad === undefined || momentum === undefined || gradients === undefined)
+        throw new NetException("Invalid parameters for gradient optimization", { value: value, grad: grad, momentum: momentum, gradients: gradients });
+
+    // We introduce momentum to escape local minimums, 
+    // Adagrad to optimize learning rate and 
+    // Adadelta which takes the good in both worlds 
+
+    if (this.optimizer === "momentum") {
+        value += (1 - alpha) * this.lr * grad + alpha * momentum;
+        momentum = value - old_value;
+    }
+
+    else if (this.optimizer === "adagrad") {
+        gradients += grad * grad; // this contains the sum of all past squared gradients
+        value += this.lr * grad / Math.sqrt(gradients + _EPSILON);
+    }
+
+    else if (this.optimizer === "adadelta") {
+        gradients = alpha * gradients + (1 - alpha) * grad * grad; // this contains the decaying average of all past squared gradients
+        value += this.lr * grad / Math.sqrt(gradients + _EPSILON);
+    }
+
+    else { // good-old vanilla SGD
+        value += this.lr * grad;
+    }
+
+    return { value: value, grad: grad, momentum: momentum, gradients: gradients };
 };
 
 Network.prototype.dropout = function(completely_random, drop_inputs) {
@@ -842,29 +891,22 @@ Network.prototype.train = function(params) {
         // Training is over : we update our weights an biais
         else if (e.data.type === _WORKER_TRAINING_OVER)
         {
-            console.error("we receive weights:", hash(e.data.weights));
-
             that.importWeights( e.data.weights );
             that.importBiais( e.data.biais );
-
-            console.error("now we have weights:", hash(that.weights));
-            
 
             // Feeding and bring in order to have updated values (as error) into neurons or others
             var inputs = training_data[0].inputs;
             if (params.recurrent === true)
                 inputs = inputs.concat(that.output);
 
-            // that.feed( inputs );
-            // that.backpropagate( training_data[0].targets );
+            that.feed( inputs );
+            that.backpropagate( training_data[0].targets );
 
             // Free space
             training_data = null;
             worker.terminate();
         }
     });
-
-    console.error("we send weights", hash(this.weights));
 
     // Start web worker with training data through epochs
     worker.postMessage({
@@ -878,13 +920,9 @@ Network.prototype.train = function(params) {
         hasDropout: params.dropout || false
     });
 
+    // You can disable worker (for exemple: analyze peformance thanks to developement utils)
     // this.disabledWorkerHandler({
-    //     lib: this.libURI,
-    //     params: this.exportParams(),
-    //     weights: this.exportWeights(),
-    //     biais: this.exportBiais(),
-    //     training_data: training_data,
-    //     epochs: epochs
+    //     ... same params ...
     // });
 
     return container || null;
