@@ -16,7 +16,7 @@ const _WEIGHT_VALUE_TOO_HIGH = 10000;
 const _WORKER_TRAINING_PENDING = 0;
 const _WORKER_TRAINING_OVER = 1;
 
-const _AVAILABLE_OPTIMIZERS = ["momentum", "adagrad", "adadelta"];
+const _AVAILABLE_OPTIMIZERS = ["momentum", "nag", "adagrad", "adadelta", "adam"];
 const _WEIGHT_RANDOM_COEFF = 1;
 const _BIAIS_RANDOM_COEFF = 1;
 const _EPSILON = 1e-8;
@@ -173,6 +173,7 @@ function Network(params) {
     this.nbWeights = undefined;
 
     // Stats-purpose:
+    this.iterations = 0;
     this.maxWeight = 0;
     this.outputError = 0;
     this.globalError = 0;
@@ -209,6 +210,11 @@ Network.prototype.loadParams = function(params) {
 
 Network.prototype.exportParams = function() {
 
+    // Ensure to update params if they were modified on live
+    for (var key in this.params)
+        if (this.hasOwnProperty(key) && this[key] !== undefined)
+            this.params[key] = this[key];
+
     return this.params;
 };
 
@@ -221,6 +227,7 @@ Network.prototype.importWeights = function(values) {
     this.weights = values;
     this.momentums.fill(0);
     this.gradients.fill(0);
+    this.iterations = 0;
 };
 
 Network.prototype.exportBiais = function() {
@@ -257,13 +264,17 @@ Network.prototype.initialize = function() {
     if (this.optimizer !== undefined && !_AVAILABLE_OPTIMIZERS.includes(this.optimizer))
         throw new NetException("Invalid optimizer. Available optimizers = ", { available: _AVAILABLE_OPTIMIZERS, optimizer: this.optimizer });
         
-    if (this.optimizer === "momentum" && (this.optimizerParams === undefined || this.optimizerParams.alpha === undefined || this.optimizerParams.alpha < 0 || this.optimizerParams.alpha > 1))
+    if ((this.optimizer === "momentum" || this.optimizer === "nag") && (this.optimizerParams === undefined || this.optimizerParams.alpha === undefined || this.optimizerParams.alpha < 0 || this.optimizerParams.alpha > 1))
         throw new NetException("Undefined or invalid momentum rate (must be between 0 and 1 both included) ", {optimizer: this.optimizer, optimizerParams: this.optimizerParams});
-    
+        
+    if (this.optimizer === "adam" && (this.optimizerParams === undefined || this.optimizerParams.beta1 === undefined || this.optimizerParams.beta2 === undefined || this.optimizerParams.beta1 < 0 || this.optimizerParams.beta1 > 1 || this.optimizerParams.beta2 < 0 || this.optimizerParams.beta2 > 1)) 
+        throw new NetException("Undefined or invalid (beta1,beta2) for Adam optimizer", {optimizer: this.optimizer, optimizerParams: this.optimizerParams});
+
     var i, j, l, sum, mul, tmp;
     var curr_layer = 0;
 
     // Initialization
+    this.iterations = 0;
     this.nbLayers   = this.layers.length;
     this.layersSum  = [];
     this.layersMul  = [];
@@ -516,7 +527,7 @@ Network.prototype.visualize = function(inputs, precision) {
 
     // Update SVG text outputs
     for (i = 0, l = this.DOM.outputTexts.length; i < l; i++)
-        this.DOM.outputTexts[i].innerHTML = output_neurons[i].output.toFixed(precision);
+        this.DOM.outputTexts[i].innerHTML = output_neurons[i].output ? output_neurons[i].output.toFixed(precision) : output_neurons[i].output;
 
     // Update SVG weights
     for (i = 0, l = this.nbWeights; i < l; i++) {
@@ -564,7 +575,7 @@ Network.prototype.feed = function(inputs) {
         neuron.output = neuron.activation(neuron.agregation); 
 
         if (!isFinite(neuron.output))
-            throw new NetException("Non finite or too high output. Try a smaller learning rate?", {neuron: neuron});
+            throw new NetException("Non finite or too high output. You may have a problem in your code", {neuron: neuron});
     }
 
     // Update network output
@@ -576,33 +587,41 @@ Network.prototype.feed = function(inputs) {
     return neurons;
 };
 
-Network.prototype.backpropagate = function(targets) {
-
-    var outputs_neurons = this.getNeuronsInLayer(this.nbLayers-1);
+Network.prototype.loss = function(targets) {
+    
+    var outputs_neurons = this.getNeuronsInLayer(this.nbLayers - 1);
 
     if (!targets || !outputs_neurons || targets.length !== outputs_neurons.length)
-        throw new NetException("Incoherent targets for current outputs", {targets: targets, outputs_neurons: outputs_neurons});
+        throw new NetException("Incoherent targets for current outputs", { targets: targets, outputs_neurons: outputs_neurons });
 
-    // Compute output error
+    // Compute output error with our loss function
     // https://en.wikipedia.org/wiki/Backpropagation
 
-    var index, weight_index, n, l, sum, calc, grad, weight, max_weight = 0;
-    var output_error = 0, curr_layer = this.nbLayers-1;
-    var neuron, next_neurons;
-
-    this.globalError = 0;
+    var n, l, neuron;
     this.outputError = 0;
 
     // Output layer filling: err = (expected-obtained)
-    for (n = 0, l = outputs_neurons.length; n < l; n++)
-    {
+    for (n = 0, l = outputs_neurons.length; n < l; n++) {
         neuron = outputs_neurons[n];
         neuron.error = (targets[n] - neuron.output) * neuron.derivative(neuron.agregation);
-        this.outputError += 1/2 * neuron.error * neuron.error;
+        this.outputError += 1 / 2 * neuron.error * neuron.error;
 
         if (!isFinite(neuron.error))
-            throw new NetException("Non finite error on output neuron. Try a smaller learning rate?", {neuron: neuron});
+            throw new NetException("Non finite error on output neuron. You may have a problem in your code", { neuron: neuron });
     }
+};
+
+Network.prototype.backpropagate = function(targets) {
+
+    // Compute current output error with our loss function 
+    this.loss(targets);
+
+    var index, weight_index, n, l, sum, calc, grad, weight, max_weight = 0;
+    var output_error = 0, curr_layer = this.nbLayers - 1;
+    var neuron, next_neurons;
+
+    this.iterations++; // need to be 1 in first for Adam computing
+    this.globalError = 0;
 
     // Fetching neurons from last layer: backpropagate error & update weights
     for (index = this.layersSum[curr_layer-1] - 1; index >= 0; index--)
@@ -627,7 +646,7 @@ Network.prototype.backpropagate = function(targets) {
         this.globalError += Math.abs(neuron.error); 
         
         if (!isFinite(neuron.error)) {
-            throw new NetException("Non finite error. Try a smaller learning rate?", {neuron: neuron});
+            throw new NetException("Non finite error. You may have a problem in your code", {neuron: neuron});
         } else if (Math.abs(neuron.error) > _ERROR_VALUE_TOO_HIGH) {
             console.info("Scaling down error to a max", {neuron: neuron, error: neuron.error});
             neuron.error = neuron.error < 0 ? - _ERROR_VALUE_TOO_HIGH : _ERROR_VALUE_TOO_HIGH;
@@ -642,7 +661,7 @@ Network.prototype.backpropagate = function(targets) {
 
             weight_index = neuron.outputWeightsIndex[n]; 
 
-            // Compute new values wrt gradient optimizer
+            // Compute new values w.r.t gradient optimizer
             grad = next_neurons[n].error * neuron.output;
             calc = this.optimizeGradient(this.weights[weight_index], grad, this.momentums[weight_index], this.gradients[weight_index]);
             
@@ -655,7 +674,7 @@ Network.prototype.backpropagate = function(targets) {
             max_weight = max_weight < Math.abs(weight) ? Math.abs(weight) : max_weight;
 
             if (!isFinite(weight)) {
-                throw new NetException("Non finite weight. Try a smaller learning rate?", {neuron: neuron, weight: weight});
+                throw new NetException("Non finite weight. You may have a problem in your code", {neuron: neuron, weight: weight});
             } else if (Math.abs(weight) > _WEIGHT_VALUE_TOO_HIGH) {
                 console.info("Scaling down weight to a max.", {neuron: neuron, weight: weight});
                 weight = weight < 0 ? - _WEIGHT_VALUE_TOO_HIGH : _WEIGHT_VALUE_TOO_HIGH;
@@ -672,7 +691,7 @@ Network.prototype.backpropagate = function(targets) {
         neuron.biaisGradient = calc.gradients;
 
         if (!isFinite(neuron.biais))
-            throw new NetException("Non finite biais. Try a smaller learning rate?", {neuron: neuron});
+            throw new NetException("Non finite biais. You may have a problem in your code", {neuron: neuron});
     }
 
     this.maxWeight = max_weight;
@@ -680,32 +699,50 @@ Network.prototype.backpropagate = function(targets) {
 
 Network.prototype.optimizeGradient = function(value, grad, momentum, gradients) {
 
-    var alpha = this.optimizerParams.alpha, old_value = value;
+    var p = this.optimizerParams, prev_momentum = momentum;
 
     if (value === undefined || grad === undefined || momentum === undefined || gradients === undefined)
         throw new NetException("Invalid parameters for gradient optimization", { value: value, grad: grad, momentum: momentum, gradients: gradients });
 
-    // We introduce momentum to escape local minimums, 
-    // Adagrad to optimize learning rate and 
-    // Adadelta which takes the good in both worlds 
+    // Momentum helps to escape local minimums, 
+    // Nesterov accelerated gradient is smarter than momentum because inertia is predicted
+    // Adagrad aims to automatically decrease the learning rate 
+    // Adadelta correct the too aggressive learning rate reduction of Adagrad
 
-    if (this.optimizer === "momentum") {
-        value += (1 - alpha) * this.lr * grad + alpha * momentum;
-        momentum = value - old_value;
-    }
+    switch (this.optimizer)
+    {
+        case "momentum":
+            momentum = (1 - p.alpha) * this.lr * grad + p.alpha * momentum;
+            value += momentum;
+            break;
+        
+        case "nag":
+            momentum = p.alpha * momentum + (1 - p.alpha) * this.lr * grad;
+            value += -p.alpha * prev_momentum + (1 + p.alpha) * momentum;
+            break;
 
-    else if (this.optimizer === "adagrad") {
-        gradients += grad * grad; // this contains the sum of all past squared gradients
-        value += this.lr * grad / Math.sqrt(gradients + _EPSILON);
-    }
+        case "adagrad":
+            gradients += grad * grad; // this contains the sum of all past squared gradients
+            value += this.lr * grad / (Math.sqrt(gradients) + _EPSILON);
+            break;
 
-    else if (this.optimizer === "adadelta") {
-        gradients = alpha * gradients + (1 - alpha) * grad * grad; // this contains the decaying average of all past squared gradients
-        value += this.lr * grad / Math.sqrt(gradients + _EPSILON);
-    }
+        case "adadelta":
+            gradients = p.alpha * gradients + (1 - p.alpha) * grad * grad; // this contains the decaying average of all past squared gradients
+            value += this.lr * grad / (Math.sqrt(gradients) + _EPSILON);
+            break;
 
-    else { // good-old vanilla SGD
-        value += this.lr * grad;
+        case "adam":
+            momentum = p.beta1 * momentum + (1 - p.beta1) * grad;
+            gradients = p.beta2 * gradients + (1 - p.beta2) * grad * grad;
+            
+            var mt = momentum / (1 - Math.pow(p.beta1, this.iterations)); // momentum biais correction
+            var gt = gradients / (1 - Math.pow(p.beta2, this.iterations)); // gradients biais correction
+
+            value += this.lr * mt / (Math.sqrt(gt) + _EPSILON);
+            break;
+
+        default: // good-old vanilla SGD
+            value += this.lr * grad;
     }
 
     return { value: value, grad: grad, momentum: momentum, gradients: gradients };
@@ -743,6 +780,18 @@ Network.prototype.dropout = function(completely_random, drop_inputs) {
     } 
 };
 
+Network.prototype.validate = function (params) {
+
+    if (!params)
+        throw new NetException("Invalid parameters object for validation", { params: params });
+
+    params.backpropagate = false;
+    params.epochs = 1;
+    params.dropout = false;
+
+    return this.train(params);
+};
+
 Network.prototype.train = function(params) {
 
     if (!params)
@@ -751,7 +800,6 @@ Network.prototype.train = function(params) {
     var training_data = params.data || undefined;
     var epochs = params.epochs || undefined;
     var visualise = params.visualise || false;
-    var recurrent = params.recurrent || false;
 
     if (!training_data || training_data.length <= 0)
         throw new NetException("Invalid raw training data (object)", {training_data: training_data});
@@ -863,7 +911,7 @@ Network.prototype.train = function(params) {
                         sum -= values.shift(values);
                 }
 
-                graph_ctx.lineTo(o, y * y_window_factor); 
+                // graph_ctx.lineTo(o, y * y_window_factor); 
                 graph_ctx.lineTo(o, 0); 
                 graph_ctx.closePath();
                 graph_ctx.fill();
@@ -900,7 +948,7 @@ Network.prototype.train = function(params) {
                 inputs = inputs.concat(that.output);
 
             that.feed( inputs );
-            that.backpropagate( training_data[0].targets );
+            that.loss( training_data[0].targets );
 
             // Free space
             training_data = null;
@@ -908,16 +956,20 @@ Network.prototype.train = function(params) {
         }
     });
 
+    console.log("will create brain with optimizer", this.optimizer, this.exportParams());
+
     // Start web worker with training data through epochs
     worker.postMessage({
         lib: this.libURI,
         params: this.exportParams(),
         weights: this.exportWeights(),
         biais: this.exportBiais(),
-        epochs: epochs,
         trainingData: training_data,
-        isRecurrent: params.recurrent || false,
-        hasDropout: params.dropout || false
+        epochs: epochs,
+        shuffle: params.shuffle !== undefined ? params.backpropagate : false,
+        backpropagate: params.backpropagate !== undefined ? params.backpropagate : true,
+        isRecurrent: params.recurrent !== undefined ? params.recurrent : false,
+        hasDropout: params.dropout !== undefined ? params.dropout : false
     });
 
     // You can disable worker (for exemple: analyze peformance thanks to developement utils)
@@ -943,6 +995,8 @@ Network.prototype.workerHandler = function() {
         var training_data = e.data.trainingData;
         var is_recurrent = e.data.isRecurrent;
         var has_dropout = e.data.hasDropout;
+        var backpropagate = e.data.backpropagate;
+        var shuffle = e.data.shuffle;
 
         console.info("Training imported data in processing... options: ", e.data);
         console.info("Brain copy below:");    
@@ -969,6 +1023,9 @@ Network.prototype.workerHandler = function() {
         // Feeforward NN
         for (curr_epoch = 0; curr_epoch < epochs; curr_epoch++)
         {
+            if (shuffle === true)
+                training_data = training_data.shuffle();
+
             for (sum = 0, i = 0; i < training_size; i++)
             {
                 try {
@@ -977,7 +1034,11 @@ Network.prototype.workerHandler = function() {
                         inputs = inputs.concat( brain.output );
     
                     brain.feed(inputs);
-                    brain.backpropagate(training_data[i].targets);
+
+                    if (backpropagate === false)
+                        brain.loss(training_data[i].targets);
+                    else
+                        brain.backpropagate(training_data[i].targets);
                 }
 
                 catch (ex) {
@@ -1192,6 +1253,20 @@ function NetException(message, variables) {
     console.error("ERROR: " + message, variables);
 }
 
-function hash(arr) {
-    return { hash: btoa(arr.join()), size: arr.length };
-}
+Array.prototype.hash = function() {
+    return { hash: btoa(this.join()), size: this.length };
+};
+
+Array.prototype.shuffle = function() {
+    
+    var j, x, i;
+
+    for (i = this.length - 1; i > 0; i--) {
+        j = Math.floor(Math.random() * (i + 1));
+        x = this[i];
+        this[i] = this[j];
+        this[j] = x;
+    }
+
+    return this;
+};
