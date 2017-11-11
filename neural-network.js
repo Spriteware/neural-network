@@ -16,6 +16,13 @@ const _WEIGHT_VALUE_TOO_HIGH = 10000;
 const _WORKER_TRAINING_PENDING = 0;
 const _WORKER_TRAINING_OVER = 1;
 
+const _DEFAULT_TRAINING_BACKPROPAGATE = true;
+const _DEFAULT_TRAINING_DROPOUT = false;
+const _DEFAULT_TRAINING_SHUFFLE = true;
+
+const _TRAINING_DROPOUT_EPOCHS_THRESHOLD = 100;
+const _TRAINING_DROPOUT_MEAN_THRESHOLD =  0.001;
+
 const _AVAILABLE_OPTIMIZERS = ["momentum", "nag", "adagrad", "adadelta", "adam"];
 const _WEIGHT_RANDOM_COEFF = 1;
 const _BIAIS_RANDOM_COEFF = 1;
@@ -86,7 +93,7 @@ Utils.static.exportTrainingData = function() {
     console.info("Saving training data...", "Reading 'training_data'");
 
     var output = document.createElement("textarea");
-    output.innerHTML = "var training_data_imported = \"" + Utils.trainingData + "\";";
+    output.innerHTML = "var imported_training_set = \"" + Utils.trainingData + "\";";
     document.body.appendChild( output );
 
     return "Export completed for " + Utils.trainingSize + " entries.";
@@ -367,10 +374,8 @@ Network.prototype.initialize = function() {
     }
 
     // Initialize brain.output to zeros, to avoid training problems
-    i = this.layers[this.nbLayers-1];
-    this.output = Array(i);
-    while (i--)
-        this.output[i] = 0; 
+    this.output = Array(this.layers[this.nbLayers - 1]);
+    this.output.fill(0);
 };
 
 Network.prototype.createVisualization = function() {
@@ -797,9 +802,9 @@ Network.prototype.train = function(params) {
     if (!params)
         throw new NetException("Invalid parameters object for training", {params: params});
 
-    var training_data = params.data || undefined;
+    var training_data = params.training_set || undefined;
+    var validation_data = params.validation_set || [];
     var epochs = params.epochs || undefined;
-    var visualise = params.visualise || false;
 
     if (!training_data || training_data.length <= 0)
         throw new NetException("Invalid raw training data (object)", {training_data: training_data});
@@ -810,9 +815,14 @@ Network.prototype.train = function(params) {
     if (typeof window.Worker === "undefined" || !window.Worker)
         throw new NetException("Web Worker is not supported by your client. Please upgrade in order to train as background operation");
 
-    // Parse training data
+    console.info("Training: trying to handle %d extracted inputs/targets", training_data.length);
+
+    if (validation_data.length >= 0)
+        console.info("Validation: trying to handle %d extracted inputs/targets", validation_data.length);
+
+    // Important to register these here
     var training_size = training_data.length;
-    console.info("Training: trying to handle %d extracted inputs/targets", training_size);
+    var validation_size = validation_data.length;
 
     // Create visualisation
     var container, graph, graph_ctx, text_output;
@@ -835,7 +845,7 @@ Network.prototype.train = function(params) {
 
         // We don't want to display too much data futilely
         if (epochs <= _CANVAS_GRAPH_EPOCHS_TRESHOLD)
-            scaled_width = _CANVAS_GRAPH_WIDTH / (epochs * training_size);
+            scaled_width = _CANVAS_GRAPH_WIDTH / (epochs * training_data.length);
         else
             scaled_width = _CANVAS_GRAPH_WIDTH / epochs;
 
@@ -857,82 +867,102 @@ Network.prototype.train = function(params) {
         if (typeof e.data.type === "undefined")
             throw new NetException("Worker message needs to contain message type (WORKER_TRAINING_X)", {data: e.data});
 
-        // Training is over : we display our output_errors curves
+        // Training is over for the current epoch: we display our losses
         if (e.data.type === _WORKER_TRAINING_PENDING)
         {
             if (params.visualize !== true)
                 return;
 
             window.requestAnimationFrame(function() {
-    
-                var output_errors = e.data.output_errors;
-                var epoch_mean = e.data.epoch_mean;
-                var global_mean = e.data.global_mean;
-                var i, l, o, oel = output_errors.length, y;
-                var tmp, sum = 0, values = [], moving_averages = [], _AVERAGES_SIZE = Math.round(oel / 10);
-                // var y_window_factor = global_mean > 0.01 ? 1 / 0.25 : 1 / global_mean * 0.25;
-                // var y_window_factor = 1 / 0.25 * global_mean;
-                // var y_window_factor = 1 / (global_mean * 1.2);
+
+                var tstats = {
+                    losses: e.data.training_stats.losses,
+                    epoch_mean_loss: e.data.training_stats.epoch_mean_loss,
+                    global_mean_loss: e.data.training_stats.global_mean_loss
+                };
+
+                var vstats = {
+                    losses: e.data.validation_stats.losses,
+                    epoch_mean_loss: e.data.validation_stats.epoch_mean_loss,
+                    global_mean_loss: e.data.validation_stats.global_mean_loss
+                };
+
+                var n, l, tsl = tstats.losses.length, vsl = vstats.losses.length, yt, yv;
+                var sum = 0, avg = [];
                 var y_window_factor = 1;
 
                 /*
-                    Warning! depending on the asked number of epochs, output_errors contains all output_errors
+                    Warning! depending on the asked number of epochs, losses contains all losses
                     for all training set inputs of all epochs, or can be only one mean value for each epoch
-                    Be careful by modifying all the computing stuff, be aware of the lengths. Use oel
+                    Be careful by modifying all the computing stuff, be aware of the lengths. Use tsl
                 */
                 
-                // Display error curve
+                // Display training set loss curve
                 graph_ctx.clearRect(0, 0, _CANVAS_GRAPH_WIDTH / scaled_width, 1);
                 graph_ctx.beginPath();
                 graph_ctx.moveTo(0, 0);
         
-                for (o = 0; o < oel; o++) {
-        
-                    // Sqrt helps to see variations in small values
-                    y = Math.sqrt(output_errors[o]); 
-
-                    graph_ctx.lineTo(o, y * y_window_factor); 
+                for (n = 0; n < tsl; n++)
+                {
+                    yt = tstats.losses[n];
+                    graph_ctx.lineTo(n, yt * y_window_factor); 
     
-                    // Graphically separate epochs
-                    if (epochs < 10 && o > 0 && o % training_size === 0) {
+                    // Graphically separate epochs (only with a small amount of epochs)
+                    if (epochs < 10 && n > 0 && n % training_size === 0) {
                         graph_ctx.save();
                         graph_ctx.fillStyle = "#d65f42";
-                        graph_ctx.fillRect(o, 0, 2 / scaled_width, 1);
+                        graph_ctx.fillRect(n, 0, 2 / scaled_width, 1);
                         graph_ctx.restore();
                     }
 
-                    // Compute moving averages for a smooth curve
-                    tmp = epochs <= _CANVAS_GRAPH_EPOCHS_TRESHOLD ? (Math.sqrt(y) || 0) : (y || 0);
-                    values.push(tmp);
-                    sum += tmp;
-                    moving_averages.push(sum / values.length);
-
-                    if (o >= _AVERAGES_SIZE)
-                        sum -= values.shift(values);
+                    // Compute average for a smooth curve
+                    // Sqrt helps to see variations in small values
+                    if (epochs <= _CANVAS_GRAPH_EPOCHS_TRESHOLD) {
+                        sum += yt || 0;
+                        avg.push(sum / avg.length);
+                    }
                 }
 
                 // graph_ctx.lineTo(o, y * y_window_factor); 
-                graph_ctx.lineTo(o, 0); 
+                graph_ctx.lineTo(n, 0); 
                 graph_ctx.closePath();
                 graph_ctx.fill();
-                // End displaying curves
+                // End display training set curve
 
-                // Display smoother error curve, only based on means :
+
+                if (epochs <= _CANVAS_GRAPH_EPOCHS_TRESHOLD)
+                {
+                    // Display smoother error curve, only based on means : (only if there are just a few epochs)
+                    graph_ctx.save();
+                    graph_ctx.strokeStyle = "#42b9f4";
+                    graph_ctx.beginPath();
+                    graph_ctx.moveTo(0, tstats.losses[0]);
+    
+                    for (n = 0, l = avg.length; n < l; n++)
+                        graph_ctx.lineTo(n, avg[n] * y_window_factor);
+    
+                    graph_ctx.lineTo(n-1, avg[n-1] * y_window_factor);
+                    graph_ctx.stroke();
+                    graph_ctx.restore();
+                    // End display smoother curves
+                }
+                
+                // Display validation set loss curve
                 graph_ctx.save();
-                graph_ctx.strokeStyle = "#42b9f4";
+                graph_ctx.strokeStyle = "#8e44ad";
                 graph_ctx.beginPath();
-                graph_ctx.moveTo(0, output_errors[0]);
+                graph_ctx.moveTo(0, vstats.losses[0]);
 
-                for (i = 0, l = moving_averages.length; i < l; i++)
-                    graph_ctx.lineTo(i, moving_averages[i] * y_window_factor);
+                for (n = 0; n < vsl; n++)
+                    graph_ctx.lineTo(n, vstats.losses[n] * y_window_factor);
 
-                graph_ctx.lineTo(oel, moving_averages[i-1] * y_window_factor);
+                graph_ctx.lineTo(vsl, vstats.losses[n-1] * y_window_factor);
                 graph_ctx.stroke();
                 graph_ctx.restore();
-                // End display smoother curves
+                // End display validation curve
 
                 // Update output text display
-                text_output.innerHTML = "epoch " + (e.data.curr_epoch+1) + "/" + epochs + " | curr error mean: " + epoch_mean.toFixed(5);
+                text_output.innerHTML = "epoch " + (e.data.curr_epoch+1) + "/" + epochs + " | curr error mean: " + tstats.epoch_mean_loss.toFixed(5);
             });
         }
 
@@ -943,15 +973,12 @@ Network.prototype.train = function(params) {
             that.importBiais( e.data.biais );
 
             // Feeding and bring in order to have updated values (as error) into neurons or others
-            var inputs = training_data[0].inputs;
-            if (params.recurrent === true)
-                inputs = inputs.concat(that.output);
-
-            that.feed( inputs );
+            that.feed( training_data[0].inputs );
             that.loss( training_data[0].targets );
 
             // Free space
             training_data = null;
+            validation_data = null;
             worker.terminate();
         }
     });
@@ -964,12 +991,16 @@ Network.prototype.train = function(params) {
         params: this.exportParams(),
         weights: this.exportWeights(),
         biais: this.exportBiais(),
+
         trainingData: training_data,
+        validationData: validation_data, // TODO validation_data is not existing
+
         epochs: epochs,
-        shuffle: params.shuffle !== undefined ? params.backpropagate : false,
-        backpropagate: params.backpropagate !== undefined ? params.backpropagate : true,
-        isRecurrent: params.recurrent !== undefined ? params.recurrent : false,
-        hasDropout: params.dropout !== undefined ? params.dropout : false
+        options: {
+            backpropagate: params.backpropagate !== undefined ? params.backpropagate : _DEFAULT_TRAINING_BACKPROPAGATE,
+            dropout: params.dropout !== undefined ? params.dropout : _DEFAULT_TRAINING_DROPOUT,
+            shuffle: params.shuffle !== undefined ? params.shuffle : _DEFAULT_TRAINING_SHUFFLE
+        }
     });
 
     // You can disable worker (for exemple: analyze peformance thanks to developement utils)
@@ -993,12 +1024,14 @@ Network.prototype.workerHandler = function() {
 
         var epochs = e.data.epochs;
         var training_data = e.data.trainingData;
-        var is_recurrent = e.data.isRecurrent;
-        var has_dropout = e.data.hasDropout;
-        var backpropagate = e.data.backpropagate;
-        var shuffle = e.data.shuffle;
+        var validation_data = e.data.validationData;
+        var options = {
+            backpropagate: e.data.options.backpropagate,
+            dropout: e.data.options.dropout,
+            shuffle: e.data.options.shuffle
+        };
 
-        console.info("Training imported data in processing... options: ", e.data);
+        console.info("Training imported data in processing... "+ epochs + "requested. Options: ", options);
         console.info("Brain copy below:");    
 
         // Create copy of our current Network
@@ -1006,39 +1039,37 @@ Network.prototype.workerHandler = function() {
         brain.importWeights(e.data.weights);
         brain.importBiais(e.data.weights);
 
-        ///////////////////// Training //////////////////////////////
+        ///////////////////// Training & validation //////////////////////////////
 
-        var i, n, curr_epoch, training_size = training_data.length;
+        var datasetHandler = function(data) {
 
-        var intputs, output_neurons = brain.getNeuronsInLayer(brain.nbLayers-1);
-        var output_errors = [];
-        var output_errors_mean = 0 ;
-        var sum = 0, global_sum = 0;
-        var epoch_mean, global_mean;
+            this.data = data;
+            this.size = data.length;
 
-        var last_means = [];
-        var last_mean_epochs = 100;
-        var last_means_sum = 0;
+            this.losses = [];
+            this.lossesMean = 0;
+            this.lossesSum = 0;
+            this.globalLossesSum = 0;
 
-        // Feeforward NN
-        for (curr_epoch = 0; curr_epoch < epochs; curr_epoch++)
-        {
-            if (shuffle === true)
-                training_data = training_data.shuffle();
+            this.epochMeanLoss = undefined;
+            this.globalMeanLoss = undefined;
+        };
 
-            for (sum = 0, i = 0; i < training_size; i++)
-            {
+        datasetHandler.prototype.train = function(options, backpropagate) {
+
+            // Shuffling data can improve learning
+            if (options.shuffle === true)
+                this.data = this.data.shuffle();
+
+            // Feeforward NN thought the training dataset
+            for (this.lossesSum = 0, i = 0; i < this.size; i++) {
                 try {
-                    inputs = training_data[i].inputs;
-                    if (is_recurrent)
-                        inputs = inputs.concat( brain.output );
-    
-                    brain.feed(inputs);
+                    brain.feed(this.data[i].inputs);
 
                     if (backpropagate === false)
-                        brain.loss(training_data[i].targets);
+                        brain.loss(this.data[i].targets);
                     else
-                        brain.backpropagate(training_data[i].targets);
+                        brain.backpropagate(this.data[i].targets);
                 }
 
                 catch (ex) {
@@ -1046,28 +1077,49 @@ Network.prototype.workerHandler = function() {
                     return;
                 }
 
-                sum += brain.outputError;
+                this.lossesSum += brain.outputError;
 
+                // Display every loss of every epochs
                 if (epochs <= _CANVAS_GRAPH_EPOCHS_TRESHOLD)
-                    output_errors.push( brain.outputError );
+                    this.losses.push(brain.outputError);
             }
-            
-            global_sum += sum;
-            epoch_mean = sum / training_size; 
-            global_mean = global_sum / ((curr_epoch+1) * training_size); 
 
-            // test: dynamic dropout
-            if (has_dropout)
+            this.globalLossesSum += this.lossesSum;
+            this.epochMeanLoss = this.lossesSum / this.size;
+            this.globalMeanLoss = this.globalLossesSum / ((curr_epoch + 1) * this.size); 
+
+            // Display the loss mean for every epoch
+            if (epochs > _CANVAS_GRAPH_EPOCHS_TRESHOLD)
+                this.losses.push(this.epochMeanLoss);
+        };
+
+        var i, n, curr_epoch;
+
+        var tstats = new datasetHandler(training_data);
+        var vstats = new datasetHandler(validation_data);
+
+        var last_means = [];
+        var last_means_sum = 0;
+
+        // Repeat the feedforward & backpropagation process for 'epochs' epochs
+        for (curr_epoch = 0; curr_epoch < epochs; curr_epoch++)
+        {
+            // Train on both training set and validation set
+            tstats.train(options, options.backpropagate);
+            vstats.train(options, false);
+
+            // Introducing dynamic dropout every _TRAINING_DROPOUT_EPOCHS_THRESHOLD epochs if the mean is
+            if (options.dropout)
             {
-                last_means_sum += epoch_mean;
-                last_means.push( epoch_mean );
+                last_means_sum += tstats.epochMeanLoss;
+                last_means.push( tstats.epochMeanLoss );
     
-                if (last_means.length >= last_mean_epochs)
+                if (last_means.length >= _TRAINING_DROPOUT_EPOCHS_THRESHOLD)
                 {
                     last_means_sum -= last_means.shift();
-                    var local_mean = last_means_sum / last_mean_epochs; 
+                    var local_mean = last_means_sum / _TRAINING_DROPOUT_EPOCHS_THRESHOLD; 
                    
-                    if (local_mean - epoch_mean <= 0.001) {
+                    if (local_mean - tstats.epochMeanLoss <= _TRAINING_DROPOUT_MEAN_THRESHOLD) {
                         console.info("EVENT: Dropout at epoch #%d", curr_epoch);
                         brain.dropout(false);
                         last_means = [];
@@ -1076,20 +1128,26 @@ Network.prototype.workerHandler = function() {
                 }
             }
 
-            if (epochs > _CANVAS_GRAPH_EPOCHS_TRESHOLD)
-                output_errors.push(epoch_mean);
-
             // Send updates back to real thread
             self.postMessage({
                 type: _WORKER_TRAINING_PENDING,
-                output_errors: output_errors,
                 curr_epoch: curr_epoch,
-                epoch_mean: epoch_mean,
-                global_mean: global_mean,
+
+                training_stats:  {
+                    losses: tstats.losses,
+                    epoch_mean_loss: tstats.epochMeanLoss,
+                    global_mean_loss: tstats.globalMeanLoss,
+                },
+
+                validation_stats: {
+                    losses: vstats.losses,
+                    epoch_mean_loss: vstats.epochMeanLoss,
+                    global_mean_loss: vstats.globalMeanLoss,
+                }
             });
         }
 
-        console.info("Training done. Gone through all epochs", {epochs: epochs, global_mean: global_mean});
+        console.info("Training done. Gone through all epochs", {epochs: epochs, global_mean_loss: tstats.global_mean_loss});
 
         self.postMessage({
             type: _WORKER_TRAINING_OVER,
