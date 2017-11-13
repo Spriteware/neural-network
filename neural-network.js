@@ -20,12 +20,14 @@ const _DEFAULT_TRAINING_BACKPROPAGATE = true;
 const _DEFAULT_TRAINING_DROPOUT = false;
 const _DEFAULT_TRAINING_SHUFFLE = true;
 
-const _TRAINING_DROPOUT_EPOCHS_THRESHOLD = 100;
+const _TRAINING_DROPOUT_EPOCHS_THRESHOLD = 200;
 const _TRAINING_DROPOUT_MEAN_THRESHOLD =  0.001;
 
+
 const _AVAILABLE_OPTIMIZERS = ["momentum", "nag", "adagrad", "adadelta", "adam"];
-const _WEIGHT_RANDOM_COEFF = 1;
-const _BIAIS_RANDOM_COEFF = 1;
+const _WEIGHT_RANDOM_COEFF = 1; // must be one if we want to keep a normal distributation centered in 0
+const _BIAIS_RANDOM_COEFF = 0.0; // usually, can be 0 or 0.1. See http://cs231n.github.io/neural-networks-2/
+const _DROPOUT_PROBABILITY = 0.5; // usually a good value also
 const _EPSILON = 1e-8;
 
 /////////////////////////////// Utils - various functions 
@@ -299,23 +301,20 @@ Network.prototype.initialize = function() {
         // [0] will be 0, Because layerMul is used to know how many weights there is before a layer, and there is no before layer 0
     }
     
-    // Register lenghts
+    // Compute and put lengths in cache
     this.nbNeurons = sum;
     this.nbWeights = this.layersMul[this.layersMul.length-1];
     this.avgWeightsPerNeuron = this.nbWeights / this.nbNeurons;
     
-    // Create weights    
-    for (i = 0; i < this.nbWeights; i++)
-    {
-        tmp = this.static_randomWeight();
-        
-        this.weights.push(tmp);
+    // Create weights, momentum and gradients
+    for (i = 0; i < this.nbWeights; i++) {
+        this.weights[i] = this.static_randomWeight();
         this.momentums.push(0);
         this.gradients.push(0);
     }
 
     // Create neurons
-    var neuron, prev_neurons = [], next_neurons = [];
+    var index, neuron, prev_neurons = [], next_neurons = [];
 
     for (curr_layer = 0, i = 0; i < this.nbNeurons; i++)
     {
@@ -326,33 +325,9 @@ Network.prototype.initialize = function() {
         this.neurons.push(neuron);
     }
 
-    // Assign weights index into neuron's cache
-    for (curr_layer = -1, i = 0; i < this.nbNeurons; i++)
-    {
-        neuron = this.neurons[i];
-
-        if (neuron.layer !== curr_layer) {
-            curr_layer++;
-            prev_neurons = curr_layer > 0 ? this.getNeuronsInLayer(curr_layer-1) : [];
-            next_neurons = curr_layer < this.nbLayers-1 ? this.getNeuronsInLayer(curr_layer+1) : [];
-        }
-
-        neuron.inputWeightsIndex = Array(prev_neurons.length);        
-        neuron.outputWeightsIndex = Array(next_neurons.length);       
-
-        // Input weights
-        for (j = 0, l = prev_neurons.length; j < l; j++)
-            neuron.inputWeightsIndex[j] = this.getWeightIndex(prev_neurons[j], neuron);
-
-        // Output weights
-        for (j = 0, l = next_neurons.length; j < l; j++)
-             neuron.outputWeightsIndex[j] = this.getWeightIndex(neuron, next_neurons[j]);
-    }
-
     // Set hidden layer activation functions 
     // (separated from loop above because we don't want input and output layers to have an activation function -by default)
-    switch (this.activation)
-    {
+    switch (this.activation) {
         case "tanh":
             this.setHiddenLayerToActivation(this.static_tanhActivation, this.static_tanhDerivative);
             break;
@@ -368,14 +343,95 @@ Network.prototype.initialize = function() {
         case "prelu":
             this.setHiddenLayerToActivation(this.static_preluActivation, this.static_preluDerivative);
             break;
-        
+
         default:
             this.setHiddenLayerToActivation(this.static_linearActivation, this.static_linearDerivative);
     }
 
+    // 1- Assign weights index into neuron's cache
+    // 2- Improve the weight initialization by ensuring that the variance is equal to 1
+    for (curr_layer = -1, i = 0; i < this.nbNeurons; i++)
+    {
+        neuron = this.neurons[i];
+
+        if (neuron.layer !== curr_layer) {
+            curr_layer++;
+            prev_neurons = curr_layer > 0 ? this.getNeuronsInLayer(curr_layer-1) : [];
+            next_neurons = curr_layer < this.nbLayers-1 ? this.getNeuronsInLayer(curr_layer+1) : [];
+        }
+
+        neuron.inputWeightsIndex = Array(prev_neurons.length);        
+        neuron.outputWeightsIndex = Array(next_neurons.length);       
+
+        // Input weights
+        for (j = 0, l = prev_neurons.length; j < l; j++) {
+            neuron.inputWeightsIndex[j] = this.getWeightIndex(prev_neurons[j], neuron);
+            this.weights[neuron.inputWeightsIndex[j]] *= Math.sqrt(2 / l);
+        }
+
+        // Output weights
+        for (j = 0, l = next_neurons.length; j < l; j++)
+             neuron.outputWeightsIndex[j] = this.getWeightIndex(neuron, next_neurons[j]);
+    }  
+
     // Initialize brain.output to zeros, to avoid training problems
     this.output = Array(this.layers[this.nbLayers - 1]);
     this.output.fill(0);
+
+    // Display the complexity of this new NN (weights + biais)
+    var parameters = this.weights.length + this.nbNeurons;
+    console.info("This neural network has %d parameters.", parameters);
+
+
+    // // --- Experimentation .... Computing variance
+    // // --- May add some improve 
+    // function variance(neuron, weights) {
+
+    //     var exp_sum, exp_mean, exp_variance, exp_inputs, len;
+
+    //     exp_inputs = neuron.inputWeightsIndex;
+    //     exp_sum = 0;
+    //     exp_variance = 0;
+    //     len = exp_inputs.length;
+
+    //     if (!len)
+    //         return null;
+
+    //     for (j = 0; j < len; j++)
+    //         exp_sum += weights[exp_inputs[j]];
+
+    //     exp_mean = exp_sum / len;
+    //     exp_sum = 0;
+
+    //     for (j = 0; j < len; j++)
+    //         exp_sum += (weights[exp_inputs[j]] - exp_mean) * (weights[exp_inputs[j]] - exp_mean);
+
+    //     return 1 / len * exp_sum;
+    // }
+
+    // var exp_mean2 = 0, exp_count = 0;
+    // for (i = 0, l = this.nbNeurons; i < l; i++)
+    // {
+    //     neuron = this.neurons[i];
+    //     var v = variance(neuron, this.weights);
+       
+    //     if (v === null)
+    //         continue;
+
+    //     // console.log("variance", v.toFixed(4));
+    //     exp_mean2 += v;
+    //     exp_count++;
+
+    //     for (j = 0; j < neuron.inputWeightsIndex.length; j++)
+    //         this.weights[neuron.inputWeightsIndex[j]] *= 1 / Math.sqrt(v);
+
+    //     // console.log("variance corrected", variance(neuron, this.weights).toFixed(4));
+    // }
+
+    // exp_mean2 /= exp_count;
+    // // console.log("MEAN variances", exp_mean2);
+
+    // -- End experimentation
 };
 
 Network.prototype.createVisualization = function() {
@@ -575,6 +631,8 @@ Network.prototype.feed = function(inputs) {
             if (!prev_neurons[n].dropped)
                 sum += this.weights[neuron.inputWeightsIndex[n]] * prev_neurons[n].output;
 
+        console.log(neuron, sum, neuron.biais );
+
         // Updating output    
         neuron.agregation = sum + neuron.biais;
         neuron.output = neuron.activation(neuron.agregation); 
@@ -586,7 +644,7 @@ Network.prototype.feed = function(inputs) {
     // Update network output
     var neurons = this.getNeuronsInLayer(this.nbLayers-1);
     for (n = 0, l = this.layers[this.nbLayers-1]; n < l; n++)
-        this.output[n] = neurons[n].output;
+        this.output[n] = neurons[n].output;            
 
     // Return output neurons
     return neurons;
@@ -759,7 +817,7 @@ Network.prototype.dropout = function(completely_random, drop_inputs) {
     // If completely_random === true, the same neuron can be dropped again. 
     // We usually start from first hidden layer, but could be possible to start from inputs layer if drop_inputs === true
 
-    var i, l, n, neurons, shot, p = 0.6;
+    var i, l, n, neurons, shot;
     completely_random = typeof completely_random === "undefined" ? true : completely_random;
 
     for (i = drop_inputs === true ? 0 : 1; i < this.nbLayers-1; i++)
@@ -769,7 +827,7 @@ Network.prototype.dropout = function(completely_random, drop_inputs) {
 
         for (n = 0, l = neurons.length; n < l; n++)
         {
-            if (shot === n || (shot === undefined && Math.random() >= p))
+            if (shot === n || (shot === undefined && Math.random() >= _DROPOUT_PROBABILITY))
             {
                 if (neurons[n].dropped === false && this.svgVisualization === true) // update vizualisation {
                     this.DOM.neuronsCircles[this.getNeuronIndex(i, n)].setAttribute("fill", _SVG_CIRCLE_COLOR_DROPPED);
@@ -889,7 +947,7 @@ Network.prototype.train = function(params) {
 
                 var n, l, tsl = tstats.losses.length, vsl = vstats.losses.length, yt, yv;
                 var sum = 0, avg = [];
-                var y_window_factor = 1;
+                var y_window_factor = 1 / 0.6;
 
                 /*
                     Warning! depending on the asked number of epochs, losses contains all losses
@@ -904,7 +962,8 @@ Network.prototype.train = function(params) {
         
                 for (n = 0; n < tsl; n++)
                 {
-                    yt = tstats.losses[n];
+                    // sqrt helps to see variations on small values 
+                    yt = Math.sqrt(tstats.losses[n]);
                     graph_ctx.lineTo(n, yt * y_window_factor); 
     
                     // Graphically separate epochs (only with a small amount of epochs)
@@ -928,7 +987,6 @@ Network.prototype.train = function(params) {
                 graph_ctx.closePath();
                 graph_ctx.fill();
                 // End display training set curve
-
 
                 if (epochs <= _CANVAS_GRAPH_EPOCHS_TRESHOLD)
                 {
@@ -954,7 +1012,7 @@ Network.prototype.train = function(params) {
                 graph_ctx.moveTo(0, vstats.losses[0]);
 
                 for (n = 0; n < vsl; n++)
-                    graph_ctx.lineTo(n, vstats.losses[n] * y_window_factor);
+                    graph_ctx.lineTo(n, Math.sqrt(vstats.losses[n]) * y_window_factor);
 
                 graph_ctx.lineTo(vsl, vstats.losses[n-1] * y_window_factor);
                 graph_ctx.stroke();
@@ -1037,7 +1095,7 @@ Network.prototype.workerHandler = function() {
         // Create copy of our current Network
         var brain = new Network(e.data.params);
         brain.importWeights(e.data.weights);
-        brain.importBiais(e.data.weights);
+        brain.importBiais(e.data.biais);
 
         ///////////////////// Training & validation //////////////////////////////
 
@@ -1074,7 +1132,7 @@ Network.prototype.workerHandler = function() {
 
                 catch (ex) {
                     console.error(ex);
-                    return;
+                    return false;
                 }
 
                 this.lossesSum += brain.outputError;
@@ -1091,6 +1149,8 @@ Network.prototype.workerHandler = function() {
             // Display the loss mean for every epoch
             if (epochs > _CANVAS_GRAPH_EPOCHS_TRESHOLD)
                 this.losses.push(this.epochMeanLoss);
+
+            return true;
         };
 
         var i, n, curr_epoch;
@@ -1105,19 +1165,24 @@ Network.prototype.workerHandler = function() {
         for (curr_epoch = 0; curr_epoch < epochs; curr_epoch++)
         {
             // Train on both training set and validation set
-            tstats.train(options, options.backpropagate);
-            vstats.train(options, false);
+            if (!tstats.train(options, options.backpropagate))
+                return;
 
-            // Introducing dynamic dropout every _TRAINING_DROPOUT_EPOCHS_THRESHOLD epochs if the mean is
-            if (options.dropout)
+            if (!vstats.train(options, false))
+                return;
+
+            options.dropout = options.dropout === true ? _TRAINING_DROPOUT_EPOCHS_THRESHOLD : options.dropout;
+
+            // Introducing dynamic dropout every requested epochs if the mean is
+            if (options.dropout !== false)
             {
                 last_means_sum += tstats.epochMeanLoss;
                 last_means.push( tstats.epochMeanLoss );
     
-                if (last_means.length >= _TRAINING_DROPOUT_EPOCHS_THRESHOLD)
+                if (last_means.length >= options.dropout)
                 {
                     last_means_sum -= last_means.shift();
-                    var local_mean = last_means_sum / _TRAINING_DROPOUT_EPOCHS_THRESHOLD; 
+                    var local_mean = last_means_sum / options.dropout; 
                    
                     if (local_mean - tstats.epochMeanLoss <= _TRAINING_DROPOUT_MEAN_THRESHOLD) {
                         console.info("EVENT: Dropout at epoch #%d", curr_epoch);
@@ -1258,11 +1323,11 @@ Network.prototype.setHiddenLayerToActivation = function(activation, derivation) 
 /////////////////////////// Statics network methods & activation functions
 
 Network.prototype.static_randomBiais = function() {
-    return (Math.random() * 2 - 1) * _BIAIS_RANDOM_COEFF;
+    return Math.randn() * _BIAIS_RANDOM_COEFF;
 };
 
 Network.prototype.static_randomWeight = function() {
-    return (Math.random() * 2 - 1) * _WEIGHT_RANDOM_COEFF;
+    return Math.randn() * _WEIGHT_RANDOM_COEFF;
 };
 
 Network.prototype.static_linearActivation = function(x) {
@@ -1327,4 +1392,8 @@ Array.prototype.shuffle = function() {
     }
 
     return this;
+};
+
+Math.randn = function() {
+    return ((Math.random() + Math.random() + Math.random() + Math.random() + Math.random() + Math.random()) - 3) / 3;
 };
