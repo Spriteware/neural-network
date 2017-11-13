@@ -8,7 +8,8 @@ const _SVG_MAX_WEIGHTS_DISPLAY_TEXT = 4;
 
 const _CANVAS_GRAPH_WIDTH = 800;
 const _CANVAS_GRAPH_HEIGHT = 100;
-const _CANVAS_GRAPH_WINDOW_FACTOR = 1 / 0.8;
+const _CANVAS_GRAPH_WINDOW_FACTOR = 1 / 0.9;
+const _CANVAS_GRAPH_SMOOTH_FACTOR = 1 / 20;
 const _CANVAS_GRAPH_SEPARATE_EPOCHS_THRESHOLD = 20;
 
 const _ERROR_VALUE_TOO_HIGH = 100000;
@@ -925,22 +926,21 @@ Network.prototype.train = function(params) {
                 var asphalt = "#34495e", purple = "#8e44ad", blue = "#3498db";
 
                 graph_ctx.clearRect(0, 0, _CANVAS_GRAPH_WIDTH / scaled_width, 1);
+
+                // Graphically separate epochs (only with a small amount of epochs)
+                if (epochs <= _CANVAS_GRAPH_SEPARATE_EPOCHS_THRESHOLD) {
+                    graph_ctx.fillStyle = "#c7cbe0";
+                    for (var i = 1; i < epochs; i++)
+                        graph_ctx.fillRect(i * _CANVAS_GRAPH_WIDTH / scaled_width / epochs, 0, 1 / scaled_width, 1);
+                }
                 
                 // Display curves for each dataset
                 display_curves( tstats.losses.average(_CANVAS_GRAPH_WIDTH), tsl, true, false, asphalt, blue );
+                display_curves(vstats.losses.average(_CANVAS_GRAPH_WIDTH * _CANVAS_GRAPH_SMOOTH_FACTOR), tsl, false, true, "pink", purple);
                 
                 // Display smoother mean if necessary
-                if (gather_all) {
-                    display_curves( tstats.losses.average(_CANVAS_GRAPH_WIDTH / 20), tsl, false, true, asphalt, blue );
-                    display_curves( vstats.losses.average(_CANVAS_GRAPH_WIDTH / 20), tsl, false, true, "pink", purple );
-                } else {
-                    display_curves( vstats.losses.average(_CANVAS_GRAPH_WIDTH), tsl, false, true, "pink", purple );
-                }
-
-                // Graphically separate epochs (only with a small amount of epochs)
-                if (epochs <= _CANVAS_GRAPH_SEPARATE_EPOCHS_THRESHOLD)
-                    for (var i = 1; i < epochs; i++)
-                        graph_ctx.fillRect(i * _CANVAS_GRAPH_WIDTH / scaled_width / epochs, 0, 2 / scaled_width, 1);
+                if (gather_all)
+                    display_curves( tstats.losses.average(_CANVAS_GRAPH_WIDTH * _CANVAS_GRAPH_SMOOTH_FACTOR), tsl, false, true, asphalt, blue );
 
                 // Update output text display
                 text_output.innerHTML = "epoch " + (e.data.curr_epoch+1) + "/" + epochs + " | curr error mean: " + tstats.epoch_mean_loss.toFixed(5);
