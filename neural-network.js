@@ -631,8 +631,6 @@ Network.prototype.feed = function(inputs) {
             if (!prev_neurons[n].dropped)
                 sum += this.weights[neuron.inputWeightsIndex[n]] * prev_neurons[n].output;
 
-        console.log(neuron, sum, neuron.biais );
-
         // Updating output    
         neuron.agregation = sum + neuron.biais;
         neuron.output = neuron.activation(neuron.agregation); 
