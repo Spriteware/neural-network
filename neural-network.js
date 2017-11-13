@@ -21,7 +21,7 @@ const _DEFAULT_TRAINING_BACKPROPAGATE = true;
 const _DEFAULT_TRAINING_DROPOUT = false;
 const _DEFAULT_TRAINING_SHUFFLE = true;
 
-const _TRAINING_GATHER_ALL_THRESHOLD = 10000;
+const _TRAINING_GATHER_ALL_THRESHOLD = 100000;
 const _TRAINING_DROPOUT_EPOCHS_THRESHOLD = 200;
 const _TRAINING_DROPOUT_MEAN_THRESHOLD =  0.001;
 
@@ -268,8 +268,8 @@ Network.prototype.initialize = function() {
     if (this.lr === undefined || this.lr <= 0)
         throw new NetException("Undefined or invalid learning rate", {lr: this.lr});
 
-    if (this.layers === undefined || this.layers.length <= 0)
-        throw new NetException("Undefined or unsificient layers", {layers: this.layers});
+    if (this.layers === undefined || this.layers.length <= 1)
+        throw new NetException("Undefined or unsufficient layers. At least, you must have a input and a output layer.", {layers: this.layers});
 
     if (this.optimizer !== undefined && !_AVAILABLE_OPTIMIZERS.includes(this.optimizer))
         throw new NetException("Invalid optimizer. Available optimizers = ", { available: _AVAILABLE_OPTIMIZERS, optimizer: this.optimizer });
@@ -382,57 +382,6 @@ Network.prototype.initialize = function() {
     // Display the complexity of this new NN (weights + biais)
     var parameters = this.weights.length + this.nbNeurons;
     console.info("This neural network has %d parameters.", parameters);
-
-
-    // // --- Experimentation .... Computing variance
-    // // --- May add some improve 
-    // function variance(neuron, weights) {
-
-    //     var exp_sum, exp_mean, exp_variance, exp_inputs, len;
-
-    //     exp_inputs = neuron.inputWeightsIndex;
-    //     exp_sum = 0;
-    //     exp_variance = 0;
-    //     len = exp_inputs.length;
-
-    //     if (!len)
-    //         return null;
-
-    //     for (j = 0; j < len; j++)
-    //         exp_sum += weights[exp_inputs[j]];
-
-    //     exp_mean = exp_sum / len;
-    //     exp_sum = 0;
-
-    //     for (j = 0; j < len; j++)
-    //         exp_sum += (weights[exp_inputs[j]] - exp_mean) * (weights[exp_inputs[j]] - exp_mean);
-
-    //     return 1 / len * exp_sum;
-    // }
-
-    // var exp_mean2 = 0, exp_count = 0;
-    // for (i = 0, l = this.nbNeurons; i < l; i++)
-    // {
-    //     neuron = this.neurons[i];
-    //     var v = variance(neuron, this.weights);
-       
-    //     if (v === null)
-    //         continue;
-
-    //     // console.log("variance", v.toFixed(4));
-    //     exp_mean2 += v;
-    //     exp_count++;
-
-    //     for (j = 0; j < neuron.inputWeightsIndex.length; j++)
-    //         this.weights[neuron.inputWeightsIndex[j]] *= 1 / Math.sqrt(v);
-
-    //     // console.log("variance corrected", variance(neuron, this.weights).toFixed(4));
-    // }
-
-    // exp_mean2 /= exp_count;
-    // // console.log("MEAN variances", exp_mean2);
-
-    // -- End experimentation
 };
 
 Network.prototype.createVisualization = function() {
@@ -911,7 +860,7 @@ Network.prototype.train = function(params) {
         graph_ctx.translate(0, _CANVAS_GRAPH_HEIGHT);
         graph_ctx.scale(scaled_width, - _CANVAS_GRAPH_HEIGHT);
         // graph_ctx.scale(1, - _CANVAS_GRAPH_HEIGHT);
-        graph_ctx.globalAlpha = 0.5;
+        graph_ctx.globalAlpha = 0.8;
         graph_ctx.lineWidth = 0.03;
     }
 
@@ -973,16 +922,16 @@ Network.prototype.train = function(params) {
 
                 var tsl = tstats.losses.length;
                 var vsl = vstats.losses.length;
-                var purple = "#8e44ad", blue = "#3498db";
+                var asphalt = "#34495e", purple = "#8e44ad", blue = "#3498db";
 
                 graph_ctx.clearRect(0, 0, _CANVAS_GRAPH_WIDTH / scaled_width, 1);
                 
                 // Display curves for each dataset
-                display_curves( tstats.losses.average(_CANVAS_GRAPH_WIDTH), tsl, true, false, "black", blue );
+                display_curves( tstats.losses.average(_CANVAS_GRAPH_WIDTH), tsl, true, false, asphalt, blue );
                 
                 // Display smoother mean if necessary
                 if (gather_all) {
-                    display_curves( tstats.losses.average(_CANVAS_GRAPH_WIDTH / 20), tsl, false, true, "black", blue );
+                    display_curves( tstats.losses.average(_CANVAS_GRAPH_WIDTH / 20), tsl, false, true, asphalt, blue );
                     display_curves( vstats.losses.average(_CANVAS_GRAPH_WIDTH / 20), tsl, false, true, "pink", purple );
                 } else {
                     display_curves( vstats.losses.average(_CANVAS_GRAPH_WIDTH), tsl, false, true, "pink", purple );
@@ -990,8 +939,8 @@ Network.prototype.train = function(params) {
 
                 // Graphically separate epochs (only with a small amount of epochs)
                 if (epochs <= _CANVAS_GRAPH_SEPARATE_EPOCHS_THRESHOLD)
-                    for (var i = 0; i < epochs; i++)
-                        graph_ctx.fillRect(i * _CANVAS_GRAPH_WIDTH / epochs, 0, 2 / scaled_width, 1);
+                    for (var i = 1; i < epochs; i++)
+                        graph_ctx.fillRect(i * _CANVAS_GRAPH_WIDTH / scaled_width / epochs, 0, 2 / scaled_width, 1);
 
                 // Update output text display
                 text_output.innerHTML = "epoch " + (e.data.curr_epoch+1) + "/" + epochs + " | curr error mean: " + tstats.epoch_mean_loss.toFixed(5);
