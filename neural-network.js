@@ -8,7 +8,8 @@ const _SVG_MAX_WEIGHTS_DISPLAY_TEXT = 4;
 
 const _CANVAS_GRAPH_WIDTH = 800;
 const _CANVAS_GRAPH_HEIGHT = 100;
-const _CANVAS_GRAPH_EPOCHS_TRESHOLD = 50;
+const _CANVAS_GRAPH_WINDOW_FACTOR = 1 / 0.8;
+const _CANVAS_GRAPH_SEPARATE_EPOCHS_THRESHOLD = 20;
 
 const _ERROR_VALUE_TOO_HIGH = 100000;
 const _WEIGHT_VALUE_TOO_HIGH = 10000;
@@ -20,9 +21,9 @@ const _DEFAULT_TRAINING_BACKPROPAGATE = true;
 const _DEFAULT_TRAINING_DROPOUT = false;
 const _DEFAULT_TRAINING_SHUFFLE = true;
 
+const _TRAINING_GATHER_ALL_THRESHOLD = 10000;
 const _TRAINING_DROPOUT_EPOCHS_THRESHOLD = 200;
 const _TRAINING_DROPOUT_MEAN_THRESHOLD =  0.001;
-
 
 const _AVAILABLE_OPTIMIZERS = ["momentum", "nag", "adagrad", "adadelta", "adam"];
 const _WEIGHT_RANDOM_COEFF = 1; // must be one if we want to keep a normal distributation centered in 0
@@ -876,11 +877,12 @@ Network.prototype.train = function(params) {
     if (validation_data.length >= 0)
         console.info("Validation: trying to handle %d extracted inputs/targets", validation_data.length);
 
-    // Important to register these here
+    // Important to register these here (accessible in worker callback)
     var training_size = training_data.length;
     var validation_size = validation_data.length;
+    var gather_all = epochs * training_size <= _TRAINING_GATHER_ALL_THRESHOLD;
 
-    // Create visualisation
+    // Create visualisation (these one are also behond the scope)
     var container, graph, graph_ctx, text_output;
     var scaled_width;
 
@@ -900,7 +902,7 @@ Network.prototype.train = function(params) {
         container.appendChild( text_output ); 
 
         // We don't want to display too much data futilely
-        if (epochs <= _CANVAS_GRAPH_EPOCHS_TRESHOLD)
+        if (gather_all)
             scaled_width = _CANVAS_GRAPH_WIDTH / (epochs * training_data.length);
         else
             scaled_width = _CANVAS_GRAPH_WIDTH / epochs;
@@ -908,6 +910,7 @@ Network.prototype.train = function(params) {
         graph_ctx = graph.getContext("2d");
         graph_ctx.translate(0, _CANVAS_GRAPH_HEIGHT);
         graph_ctx.scale(scaled_width, - _CANVAS_GRAPH_HEIGHT);
+        // graph_ctx.scale(1, - _CANVAS_GRAPH_HEIGHT);
         graph_ctx.globalAlpha = 0.5;
         graph_ctx.lineWidth = 0.03;
     }
@@ -929,6 +932,31 @@ Network.prototype.train = function(params) {
             if (params.visualize !== true)
                 return;
 
+            var display_curves = function(data, window_width, fill, stroke, fill_style, stroke_style) {
+                
+                var ratio = window_width / data.length;
+                var l = data.length;
+
+                graph_ctx.fillStyle = fill_style;
+                graph_ctx.strokeStyle = stroke_style;
+                graph_ctx.beginPath();
+                graph_ctx.moveTo(0, 0);
+
+                for (var i = 0; i < l; i++)
+                    graph_ctx.lineTo(i * ratio, Math.sqrt(data[i] + _EPSILON) * _CANVAS_GRAPH_WINDOW_FACTOR);
+
+                if (fill) {
+                    graph_ctx.lineTo(i * ratio, 0);
+                    graph_ctx.closePath();
+                    graph_ctx.fill();
+                }
+
+                if (stroke) {
+                    graph_ctx.stroke();
+                    graph_ctx.closePath();
+                }
+            };
+
             window.requestAnimationFrame(function() {
 
                 var tstats = {
@@ -943,79 +971,27 @@ Network.prototype.train = function(params) {
                     global_mean_loss: e.data.validation_stats.global_mean_loss
                 };
 
-                var n, l, tsl = tstats.losses.length, vsl = vstats.losses.length, yt, yv;
-                var sum = 0, avg = [];
-                var y_window_factor = 1 / 0.6;
+                var tsl = tstats.losses.length;
+                var vsl = vstats.losses.length;
+                var purple = "#8e44ad", blue = "#3498db";
 
-                /*
-                    Warning! depending on the asked number of epochs, losses contains all losses
-                    for all training set inputs of all epochs, or can be only one mean value for each epoch
-                    Be careful by modifying all the computing stuff, be aware of the lengths. Use tsl
-                */
-                
-                // Display training set loss curve
                 graph_ctx.clearRect(0, 0, _CANVAS_GRAPH_WIDTH / scaled_width, 1);
-                graph_ctx.beginPath();
-                graph_ctx.moveTo(0, 0);
-        
-                for (n = 0; n < tsl; n++)
-                {
-                    // sqrt helps to see variations on small values 
-                    yt = Math.sqrt(tstats.losses[n]);
-                    graph_ctx.lineTo(n, yt * y_window_factor); 
-    
-                    // Graphically separate epochs (only with a small amount of epochs)
-                    if (epochs < 10 && n > 0 && n % training_size === 0) {
-                        graph_ctx.save();
-                        graph_ctx.fillStyle = "#d65f42";
-                        graph_ctx.fillRect(n, 0, 2 / scaled_width, 1);
-                        graph_ctx.restore();
-                    }
-
-                    // Compute average for a smooth curve
-                    // Sqrt helps to see variations in small values
-                    if (epochs <= _CANVAS_GRAPH_EPOCHS_TRESHOLD) {
-                        sum += yt || 0;
-                        avg.push(sum / avg.length);
-                    }
-                }
-
-                // graph_ctx.lineTo(o, y * y_window_factor); 
-                graph_ctx.lineTo(n, 0); 
-                graph_ctx.closePath();
-                graph_ctx.fill();
-                // End display training set curve
-
-                if (epochs <= _CANVAS_GRAPH_EPOCHS_TRESHOLD)
-                {
-                    // Display smoother error curve, only based on means : (only if there are just a few epochs)
-                    graph_ctx.save();
-                    graph_ctx.strokeStyle = "#42b9f4";
-                    graph_ctx.beginPath();
-                    graph_ctx.moveTo(0, tstats.losses[0]);
-    
-                    for (n = 0, l = avg.length; n < l; n++)
-                        graph_ctx.lineTo(n, avg[n] * y_window_factor);
-    
-                    graph_ctx.lineTo(n-1, avg[n-1] * y_window_factor);
-                    graph_ctx.stroke();
-                    graph_ctx.restore();
-                    // End display smoother curves
-                }
                 
-                // Display validation set loss curve
-                graph_ctx.save();
-                graph_ctx.strokeStyle = "#8e44ad";
-                graph_ctx.beginPath();
-                graph_ctx.moveTo(0, vstats.losses[0]);
+                // Display curves for each dataset
+                display_curves( tstats.losses.average(_CANVAS_GRAPH_WIDTH), tsl, true, false, "black", blue );
+                
+                // Display smoother mean if necessary
+                if (gather_all) {
+                    display_curves( tstats.losses.average(_CANVAS_GRAPH_WIDTH / 20), tsl, false, true, "black", blue );
+                    display_curves( vstats.losses.average(_CANVAS_GRAPH_WIDTH / 20), tsl, false, true, "pink", purple );
+                } else {
+                    display_curves( vstats.losses.average(_CANVAS_GRAPH_WIDTH), tsl, false, true, "pink", purple );
+                }
 
-                for (n = 0; n < vsl; n++)
-                    graph_ctx.lineTo(n, Math.sqrt(vstats.losses[n]) * y_window_factor);
-
-                graph_ctx.lineTo(vsl, vstats.losses[n-1] * y_window_factor);
-                graph_ctx.stroke();
-                graph_ctx.restore();
-                // End display validation curve
+                // Graphically separate epochs (only with a small amount of epochs)
+                if (epochs <= _CANVAS_GRAPH_SEPARATE_EPOCHS_THRESHOLD)
+                    for (var i = 0; i < epochs; i++)
+                        graph_ctx.fillRect(i * _CANVAS_GRAPH_WIDTH / epochs, 0, 2 / scaled_width, 1);
 
                 // Update output text display
                 text_output.innerHTML = "epoch " + (e.data.curr_epoch+1) + "/" + epochs + " | curr error mean: " + tstats.epoch_mean_loss.toFixed(5);
@@ -1038,8 +1014,6 @@ Network.prototype.train = function(params) {
             worker.terminate();
         }
     });
-
-    console.log("will create brain with optimizer", this.optimizer, this.exportParams());
 
     // Start web worker with training data through epochs
     worker.postMessage({
@@ -1113,6 +1087,10 @@ Network.prototype.workerHandler = function() {
 
         datasetHandler.prototype.train = function(options, backpropagate) {
 
+            // At a threshold, we only collect back the mean of every epoch. It enhance display performance (on the canvas)
+            // and avoid passing oversized arrays back to the main thread
+            var gather_all = epochs * this.size <= _TRAINING_GATHER_ALL_THRESHOLD;
+
             // Shuffling data can improve learning
             if (options.shuffle === true)
                 this.data = this.data.shuffle();
@@ -1136,7 +1114,7 @@ Network.prototype.workerHandler = function() {
                 this.lossesSum += brain.outputError;
 
                 // Display every loss of every epochs
-                if (epochs <= _CANVAS_GRAPH_EPOCHS_TRESHOLD)
+                if (gather_all)
                     this.losses.push(brain.outputError);
             }
 
@@ -1145,7 +1123,7 @@ Network.prototype.workerHandler = function() {
             this.globalMeanLoss = this.globalLossesSum / ((curr_epoch + 1) * this.size); 
 
             // Display the loss mean for every epoch
-            if (epochs > _CANVAS_GRAPH_EPOCHS_TRESHOLD)
+            if (!gather_all)
                 this.losses.push(this.epochMeanLoss);
 
             return true;
@@ -1162,16 +1140,18 @@ Network.prototype.workerHandler = function() {
         // Repeat the feedforward & backpropagation process for 'epochs' epochs
         for (curr_epoch = 0; curr_epoch < epochs; curr_epoch++)
         {
-            // Train on both training set and validation set
+            // Train by using the training set
             if (!tstats.train(options, options.backpropagate))
                 return;
 
+            // Just feed the NN to the validation set
             if (!vstats.train(options, false))
                 return;
 
             options.dropout = options.dropout === true ? _TRAINING_DROPOUT_EPOCHS_THRESHOLD : options.dropout;
 
-            // Introducing dynamic dropout every requested epochs if the mean is
+            // Introducing dynamic dropout every "options.dropout" epochs,
+            // if the mean difference is below _TRAINING_DROPOUT_MEAN_THRESHOLD
             if (options.dropout !== false)
             {
                 last_means_sum += tstats.epochMeanLoss;
@@ -1321,11 +1301,11 @@ Network.prototype.setHiddenLayerToActivation = function(activation, derivation) 
 /////////////////////////// Statics network methods & activation functions
 
 Network.prototype.static_randomBiais = function() {
-    return Math.randn() * _BIAIS_RANDOM_COEFF;
+    return Math.uniform() * _BIAIS_RANDOM_COEFF;
 };
 
 Network.prototype.static_randomWeight = function() {
-    return Math.randn() * _WEIGHT_RANDOM_COEFF;
+    return Math.uniform() * _WEIGHT_RANDOM_COEFF;
 };
 
 Network.prototype.static_linearActivation = function(x) {
@@ -1392,6 +1372,29 @@ Array.prototype.shuffle = function() {
     return this;
 };
 
-Math.randn = function() {
+Array.prototype.average = function(size) {
+
+    if (size >= this.length)
+        return this;
+
+    var ratio = this.length / size;
+    var index, i, j, l = this.length, n = Math.ceil(ratio);
+    var sum, mean, avgs = [];
+
+    for (i = 0; i < size; i++)
+    {
+        index = index = Math.floor(i * ratio);
+        sum = 0;
+
+        for (j = 0; j < n && index+j < l; j++)
+            sum += this[index + j];
+        
+        avgs.push(sum / n);
+    }
+    
+    return avgs;
+};
+
+Math.uniform = function() {
     return ((Math.random() + Math.random() + Math.random() + Math.random() + Math.random() + Math.random()) - 3) / 3;
 };
