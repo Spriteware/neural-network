@@ -934,13 +934,15 @@ Network.prototype.train = function(params) {
                         graph_ctx.fillRect(i * _CANVAS_GRAPH_WIDTH / scaled_width / epochs, 0, 1 / scaled_width, 1);
                 }
                 
-                // Display curves for each dataset
+                // Display the training set losses curve
                 display_curves( tstats.losses.average(_CANVAS_GRAPH_WIDTH), tsl, true, false, asphalt, blue );
-                display_curves(vstats.losses.average(_CANVAS_GRAPH_WIDTH * _CANVAS_GRAPH_SMOOTH_FACTOR), tsl, false, true, "pink", purple);
                 
                 // Display smoother mean if necessary
                 if (gather_all)
                     display_curves( tstats.losses.average(_CANVAS_GRAPH_WIDTH * _CANVAS_GRAPH_SMOOTH_FACTOR), tsl, false, true, asphalt, blue );
+
+                // Display the validation set smoothly 
+                display_curves(vstats.losses.average(_CANVAS_GRAPH_WIDTH * _CANVAS_GRAPH_SMOOTH_FACTOR), tsl, false, true, "pink", purple);
 
                 // Update output text display
                 text_output.innerHTML = "epoch " + (e.data.curr_epoch+1) + "/" + epochs + " | curr error mean: " + tstats.epoch_mean_loss.toFixed(5);
