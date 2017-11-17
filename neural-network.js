@@ -1,10 +1,24 @@
 "use strict";
 
-const _SVG_STROKE_WIDTH  = 4;
-const _SVG_CIRCLE_RADIUS = 15;
-const _SVG_CIRCLE_COLOR_DEFAULT = "#ffe5e5";
-const _SVG_CIRCLE_COLOR_DROPPED = "#c7c7c7";
-const _SVG_MAX_WEIGHTS_DISPLAY_TEXT = 4;
+const _AVAILABLE_OPTIMIZERS = ["momentum", "nag", "adagrad", "adadelta", "adam"];
+const _WEIGHT_RANDOM_COEFF  = 1;    // must be one if we want to keep a normal distributation centered in 0
+const _BIAIS_RANDOM_COEFF   = 0.0;  // usually, can be 0 or 0.1. See http: //cs231n.github.io/neural-networks-2/
+const _DROPOUT_PROBABILITY  = 0.5;  // usually a good value also
+const _EPSILON = 1e-8;
+
+const _TRAINING_GATHER_ALL_THRESHOLD = 100000;
+const _TRAINING_DROPOUT_EPOCHS_THRESHOLD = 200;
+const _TRAINING_DROPOUT_MEAN_THRESHOLD = 0.001;
+
+const _DEFAULT_TRAINING_BACKPROPAGATE = true;
+const _DEFAULT_TRAINING_DROPOUT = false;
+const _DEFAULT_TRAINING_SHUFFLE = true;
+
+const _WORKER_TRAINING_PENDING = 0;
+const _WORKER_TRAINING_OVER = 1;
+
+const _ERROR_VALUE_TOO_HIGH = 100000;
+const _WEIGHT_VALUE_TOO_HIGH = 10000;
 
 const _CANVAS_GRAPH_WIDTH = 800;
 const _CANVAS_GRAPH_HEIGHT = 100;
@@ -12,25 +26,16 @@ const _CANVAS_GRAPH_WINDOW_FACTOR = 1 / 0.9;
 const _CANVAS_GRAPH_SMOOTH_FACTOR = 1 / 20;
 const _CANVAS_GRAPH_SEPARATE_EPOCHS_THRESHOLD = 20;
 
-const _ERROR_VALUE_TOO_HIGH = 100000;
-const _WEIGHT_VALUE_TOO_HIGH = 10000;
+const _SVG_STROKE_WIDTH = 4;
+const _SVG_CIRCLE_RADIUS = 15;
+const _SVG_CIRCLE_COLOR_DEFAULT = "#ffe5e5";
+const _SVG_CIRCLE_COLOR_DROPPED = "#c7c7c7";
+const _SVG_MAX_WEIGHTS_DISPLAY_TEXT = 4;
 
-const _WORKER_TRAINING_PENDING = 0;
-const _WORKER_TRAINING_OVER = 1;
-
-const _DEFAULT_TRAINING_BACKPROPAGATE = true;
-const _DEFAULT_TRAINING_DROPOUT = false;
-const _DEFAULT_TRAINING_SHUFFLE = true;
-
-const _TRAINING_GATHER_ALL_THRESHOLD = 100000;
-const _TRAINING_DROPOUT_EPOCHS_THRESHOLD = 200;
-const _TRAINING_DROPOUT_MEAN_THRESHOLD =  0.001;
-
-const _AVAILABLE_OPTIMIZERS = ["momentum", "nag", "adagrad", "adadelta", "adam"];
-const _WEIGHT_RANDOM_COEFF = 1; // must be one if we want to keep a normal distributation centered in 0
-const _BIAIS_RANDOM_COEFF = 0.0; // usually, can be 0 or 0.1. See http://cs231n.github.io/neural-networks-2/
-const _DROPOUT_PROBABILITY = 0.5; // usually a good value also
-const _EPSILON = 1e-8;
+const _COLOR_ASPHALT = "rgb(52, 73, 94)";
+const _COLOR_PURPLE = "rgb(142, 68, 173)";
+const _COLOR_BLUE = "rgb(52, 152, 219)";
+const _COLOR_GREEN = "rgb(26, 188, 156)";
 
 /////////////////////////////// Utils - various functions 
 
@@ -811,6 +816,8 @@ Network.prototype.train = function(params) {
 
     var training_data = params.training_set || undefined;
     var validation_data = params.validation_set || [];
+    var test_data = params.test_set || [];
+
     var epochs = params.epochs || undefined;
 
     if (!training_data || training_data.length <= 0)
@@ -821,16 +828,16 @@ Network.prototype.train = function(params) {
         
     if (typeof window.Worker === "undefined" || !window.Worker)
         throw new NetException("Web Worker is not supported by your client. Please upgrade in order to train as background operation");
-
-    console.info("Training: trying to handle %d extracted inputs/targets", training_data.length);
-
-    if (validation_data.length >= 0)
-        console.info("Validation: trying to handle %d extracted inputs/targets", validation_data.length);
-
+        
     // Important to register these here (accessible in worker callback)
     var training_size = training_data.length;
     var validation_size = validation_data.length;
+    var test_size = test_data.length;
     var gather_all = epochs * training_size <= _TRAINING_GATHER_ALL_THRESHOLD;
+
+    console.info("Training: trying to handle %d extracted inputs/targets", training_size);
+    console.info("Validation: trying to handle %d extracted inputs/targets", validation_size);
+    console.info("Test: trying to handle %d extracted inputs/targets", test_size);
 
     // Create visualisation (these one are also behond the scope)
     var container, graph, graph_ctx, text_output;
@@ -863,6 +870,43 @@ Network.prototype.train = function(params) {
         // graph_ctx.scale(1, - _CANVAS_GRAPH_HEIGHT);
         graph_ctx.globalAlpha = 0.8;
         graph_ctx.lineWidth = 0.03;
+
+        // Following functions will be called in our requestAnimFrame
+        var display_curves = function (data, window_width, fill, stroke, fill_style, stroke_style)
+        {
+            if (!data || data.length === 0)
+                return;
+
+            var ratio = window_width / data.length;
+            var l = data.length;
+
+            graph_ctx.fillStyle = fill_style;
+            graph_ctx.strokeStyle = stroke_style;
+            graph_ctx.beginPath();
+            graph_ctx.moveTo(0, 0);
+
+            for (var i = 0; i < l; i++)
+                graph_ctx.lineTo(i * ratio, Math.sqrt(data[i] + _EPSILON) * _CANVAS_GRAPH_WINDOW_FACTOR);
+
+            if (fill) {
+                graph_ctx.lineTo(i * ratio, 0);
+                graph_ctx.closePath();
+                graph_ctx.fill();
+            }
+
+            if (stroke) {
+                graph_ctx.stroke();
+                graph_ctx.closePath();
+            }
+        };
+
+        var Stats = function (losses, epoch_mean_loss, global_mean_loss) {
+
+            this.size = losses.length;
+            this.losses = losses;
+            this.epoch_mean_loss = epoch_mean_loss;
+            this.global_mean_loss = global_mean_loss;
+        };
     }
 
     //////////////// Worker below ////////////////////////////
@@ -882,48 +926,15 @@ Network.prototype.train = function(params) {
             if (params.visualize !== true)
                 return;
 
-            var display_curves = function(data, window_width, fill, stroke, fill_style, stroke_style) {
-                
-                var ratio = window_width / data.length;
-                var l = data.length;
-
-                graph_ctx.fillStyle = fill_style;
-                graph_ctx.strokeStyle = stroke_style;
-                graph_ctx.beginPath();
-                graph_ctx.moveTo(0, 0);
-
-                for (var i = 0; i < l; i++)
-                    graph_ctx.lineTo(i * ratio, Math.sqrt(data[i] + _EPSILON) * _CANVAS_GRAPH_WINDOW_FACTOR);
-
-                if (fill) {
-                    graph_ctx.lineTo(i * ratio, 0);
-                    graph_ctx.closePath();
-                    graph_ctx.fill();
-                }
-
-                if (stroke) {
-                    graph_ctx.stroke();
-                    graph_ctx.closePath();
-                }
-            };
-
             window.requestAnimationFrame(function() {
 
-                var tstats = {
-                    losses: e.data.training_stats.losses,
-                    epoch_mean_loss: e.data.training_stats.epoch_mean_loss,
-                    global_mean_loss: e.data.training_stats.global_mean_loss
-                };
+                var training = new Stats(e.data.training_stats.losses, e.data.training_stats.epoch_mean_loss, e.data.training_stats.global_mean_loss);
+                var validation = new Stats(e.data.validation_stats.losses, e.data.validation_stats.epoch_mean_loss, e.data.validation_stats.global_mean_loss);
+                var test = new Stats(e.data.test_stats.losses, e.data.test_stats.epoch_mean_loss, e.data.test_stats.global_mean_loss);
 
-                var vstats = {
-                    losses: e.data.validation_stats.losses,
-                    epoch_mean_loss: e.data.validation_stats.epoch_mean_loss,
-                    global_mean_loss: e.data.validation_stats.global_mean_loss
-                };
+                var smooth_size = _CANVAS_GRAPH_WIDTH * _CANVAS_GRAPH_SMOOTH_FACTOR;
 
-                var tsl = tstats.losses.length;
-                var vsl = vstats.losses.length;
-                var asphalt = "#34495e", purple = "#8e44ad", blue = "#3498db";
+                ////////////////////////////
 
                 graph_ctx.clearRect(0, 0, _CANVAS_GRAPH_WIDTH / scaled_width, 1);
 
@@ -935,17 +946,18 @@ Network.prototype.train = function(params) {
                 }
                 
                 // Display the training set losses curve
-                display_curves( tstats.losses.average(_CANVAS_GRAPH_WIDTH), tsl, true, false, asphalt, blue );
+                display_curves(training.losses.average(_CANVAS_GRAPH_WIDTH), training.size, true, false, _COLOR_ASPHALT, _COLOR_BLUE);
                 
                 // Display smoother mean if necessary
                 if (gather_all)
-                    display_curves( tstats.losses.average(_CANVAS_GRAPH_WIDTH * _CANVAS_GRAPH_SMOOTH_FACTOR), tsl, false, true, asphalt, blue );
+                    display_curves(training.losses.average(_CANVAS_GRAPH_WIDTH * _CANVAS_GRAPH_SMOOTH_FACTOR), training.size, false, true, _COLOR_ASPHALT, _COLOR_BLUE);
 
-                // Display the validation set smoothly 
-                display_curves(vstats.losses.average(_CANVAS_GRAPH_WIDTH * _CANVAS_GRAPH_SMOOTH_FACTOR), tsl, false, true, "pink", purple);
+                // Display the validation set and test set smoothly 
+                display_curves(validation.losses.average(_CANVAS_GRAPH_WIDTH), training.size, false, true, "pink", _COLOR_PURPLE);
+                display_curves(test.losses.average(_CANVAS_GRAPH_WIDTH), training.size, false, true, "pink", _COLOR_GREEN);
 
                 // Update output text display
-                text_output.innerHTML = "epoch " + (e.data.curr_epoch+1) + "/" + epochs + " | curr error mean: " + tstats.epoch_mean_loss.toFixed(5);
+                text_output.innerHTML = "epoch " + (e.data.curr_epoch+1) + "/" + epochs + " | curr error mean: " + training.epoch_mean_loss.toFixed(5);
             });
         }
 
@@ -962,6 +974,7 @@ Network.prototype.train = function(params) {
             // Free space
             training_data = null;
             validation_data = null;
+            test_data = null;
             worker.terminate();
         }
     });
@@ -974,7 +987,8 @@ Network.prototype.train = function(params) {
         biais: this.exportBiais(),
 
         trainingData: training_data,
-        validationData: validation_data, // TODO validation_data is not existing
+        validationData: validation_data, 
+        testData: test_data, 
 
         epochs: epochs,
         options: {
@@ -1006,6 +1020,7 @@ Network.prototype.workerHandler = function() {
         var epochs = e.data.epochs;
         var training_data = e.data.trainingData;
         var validation_data = e.data.validationData;
+        var test_data = e.data.testData;
         var options = {
             backpropagate: e.data.options.backpropagate,
             dropout: e.data.options.dropout,
@@ -1020,7 +1035,7 @@ Network.prototype.workerHandler = function() {
         brain.importWeights(e.data.weights);
         brain.importBiais(e.data.biais);
 
-        ///////////////////// Training & validation //////////////////////////////
+        ///////////////////// Training - validation - test  //////////////////////////////
 
         var datasetHandler = function(data) {
 
@@ -1036,7 +1051,7 @@ Network.prototype.workerHandler = function() {
             this.globalMeanLoss = undefined;
         };
 
-        datasetHandler.prototype.train = function(options, backpropagate) {
+        datasetHandler.prototype.fetch = function(options, backpropagate) {
 
             // At a threshold, we only collect back the mean of every epoch. It enhance display performance (on the canvas)
             // and avoid passing oversized arrays back to the main thread
@@ -1082,9 +1097,11 @@ Network.prototype.workerHandler = function() {
 
         var i, n, curr_epoch;
 
-        var tstats = new datasetHandler(training_data);
-        var vstats = new datasetHandler(validation_data);
+        var training_handler = new datasetHandler(training_data);
+        var validation_handler = new datasetHandler(validation_data);
+        var test_handler = new datasetHandler(test_data);
 
+        // Variables that will store means of the current training in order to fire a dropout if requested. See below the dropout execution
         var last_means = [];
         var last_means_sum = 0;
 
@@ -1092,11 +1109,15 @@ Network.prototype.workerHandler = function() {
         for (curr_epoch = 0; curr_epoch < epochs; curr_epoch++)
         {
             // Train by using the training set
-            if (!tstats.train(options, options.backpropagate))
+            if (!training_handler.fetch(options, options.backpropagate))
                 return;
 
-            // Just feed the NN to the validation set
-            if (!vstats.train(options, false))
+            // Feed the NN with the validation set
+            if (!validation_handler.fetch(options, false))
+                return;
+
+            // Feed the NN with the test set
+            if (!test_handler.fetch(options, false))
                 return;
 
             options.dropout = options.dropout === true ? _TRAINING_DROPOUT_EPOCHS_THRESHOLD : options.dropout;
@@ -1105,15 +1126,15 @@ Network.prototype.workerHandler = function() {
             // if the mean difference is below _TRAINING_DROPOUT_MEAN_THRESHOLD
             if (options.dropout !== false)
             {
-                last_means_sum += tstats.epochMeanLoss;
-                last_means.push( tstats.epochMeanLoss );
+                last_means_sum += training_handler.epochMeanLoss;
+                last_means.push( training_handler.epochMeanLoss );
     
                 if (last_means.length >= options.dropout)
                 {
                     last_means_sum -= last_means.shift();
                     var local_mean = last_means_sum / options.dropout; 
                    
-                    if (local_mean - tstats.epochMeanLoss <= _TRAINING_DROPOUT_MEAN_THRESHOLD) {
+                    if (local_mean - training_handler.epochMeanLoss <= _TRAINING_DROPOUT_MEAN_THRESHOLD) {
                         console.info("EVENT: Dropout at epoch #%d", curr_epoch);
                         brain.dropout(false);
                         last_means = [];
@@ -1128,20 +1149,26 @@ Network.prototype.workerHandler = function() {
                 curr_epoch: curr_epoch,
 
                 training_stats:  {
-                    losses: tstats.losses,
-                    epoch_mean_loss: tstats.epochMeanLoss,
-                    global_mean_loss: tstats.globalMeanLoss,
+                    losses: training_handler.losses,
+                    epoch_mean_loss: training_handler.epochMeanLoss,
+                    global_mean_loss: training_handler.globalMeanLoss,
                 },
 
                 validation_stats: {
-                    losses: vstats.losses,
-                    epoch_mean_loss: vstats.epochMeanLoss,
-                    global_mean_loss: vstats.globalMeanLoss,
+                    losses: validation_handler.losses,
+                    epoch_mean_loss: validation_handler.epochMeanLoss,
+                    global_mean_loss: validation_handler.globalMeanLoss,
+                },
+
+                 test_stats: {
+                    losses: test_handler.losses,
+                    epoch_mean_loss: test_handler.epochMeanLoss,
+                    global_mean_loss: test_handler.globalMeanLoss,
                 }
             });
         }
 
-        console.info("Training done. Gone through all epochs", {epochs: epochs, global_mean_loss: tstats.global_mean_loss});
+        console.info("Training done. Gone through all epochs", {epochs: epochs, global_mean_loss: training_handler.global_mean_loss});
 
         self.postMessage({
             type: _WORKER_TRAINING_OVER,
@@ -1330,7 +1357,7 @@ Array.prototype.average = function(size) {
 
     var ratio = this.length / size;
     var index, i, j, l = this.length, n = Math.ceil(ratio);
-    var sum, mean, avgs = [];
+    var sum, last_sum = 0, mean, avgs = [];
 
     for (i = 0; i < size; i++)
     {
@@ -1340,7 +1367,8 @@ Array.prototype.average = function(size) {
         for (j = 0; j < n && index+j < l; j++)
             sum += this[index + j];
         
-        avgs.push(sum / n);
+        avgs.push((sum + last_sum) / (n * 2));
+        last_sum = sum;
     }
     
     return avgs;
