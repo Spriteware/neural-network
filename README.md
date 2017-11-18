@@ -1,7 +1,20 @@
-# It's for training but also visualisation
+# A up-to-date implementation of a Neural Network in JavaScript 
 
-This piece of code is a neural network implementation in Javascript. 
-You can see an example of what it does here : https://franpapers.com/en/2017-neural-network-implementation-in-javascript-by-an-example/
+> This library provides neural networks models that can be trained and
+> visualized with various optimizers, into its own thread. You can see
+> an example of what it does here:  
+> **Article:** https://franpapers.com/en/2017-neural-network-implementation-in-javascript-by-an-example/
+> **Video:** https://www.youtube.com/watch?v=tIdTulicm9M
+
+Summary:
+
+ 1. [Introduction](#introduction) 
+ 2. [Basic example](#basic-example)
+ 3. [Data example](#data-example)
+ 4. [Helpers for creating a dataset](#helpers-for-creating-a-dataset) 
+ 5. [What's next](#whats-next)
+
+## 1 • Introduction
 
 The main idea was to do something that can **help to visualize the network and its modification** through backpropagation. Here's an example:
 
@@ -11,7 +24,7 @@ The main idea was to do something that can **help to visualize the network and i
 
 This library was not meant for "distribution" purpose, so it may have thousand bugs and may be not working as you want. **Fork it !**
 
-## Basic example
+## 2 • Basic example
 It's simple, there are just way too much comments
 ```javascript
 
@@ -95,7 +108,7 @@ brain.backpropagate(targets);
 
 ```
 
-## Training data example 
+## 2 • Training data example 
 The training looks like a CSV file. Except that it is not. Every `inputs/targets` couple is separated by a `;`. `inputs `and `targets` are separated by a `:`. `inputs` or `targets` values are seperated by a `space`. Here is an example:
 ```
 input1 input2 input3 input4 : target1 target2 ;
@@ -111,7 +124,7 @@ var training_data_imported = "0 0.004012032080192407 0 0.004012032080192407 : 6.
 ";
 ```
 
-## Helpers for creating a dataset 
+## 3 • Helpers for creating a dataset 
 There are a few helpers functions if you want to generate your dataset meanwhile you train (or not) your neural network. They are under `Utils.static.xxx` and you can call them in your script or your console.
 ```javascript
 
@@ -129,10 +142,11 @@ Utils.static.exportTrainingData();
 Utils.static.clearTrainingData();
 ```
 
-## And ?
+## 4 • What's next?
 
-And that's it. There are no other things to learn about this.
+And that's it. 
 You can check my other github repo "[Spriteware/machinelearning](https://github.com/Spriteware/machinelearning)" to see more implementations examples. 
 
 If you like this work, don't hesitate to send me a friendly message on twitter [@Spriteware](https://twitter.com/Spriteware).
 You can also visit my blog: [franpapers.com](https://franpapers.com)
+
