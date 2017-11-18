@@ -2,17 +2,17 @@
 
 > This library provides neural networks models that can be trained and
 > visualized with various optimizers, into its own thread. You can see
-> an example of what it does here:  
-> **Article:** https://franpapers.com/en/2017-neural-network-implementation-in-javascript-by-an-example/
-> **Video:** https://www.youtube.com/watch?v=tIdTulicm9M
+> an example of what it does here: 
+> **Article:** https://franpapers.com/en/2017-neural-network-implementation-in-javascript-by-an-example/  
+> **Video:** https://www.youtube.com/watch?v=tIdTulicm9M  
 
 Summary:
 
- 1. [Introduction](#introduction) 
- 2. [Basic example](#basic-example)
- 3. [Data example](#data-example)
- 4. [Helpers for creating a dataset](#helpers-for-creating-a-dataset) 
- 5. [What's next](#whats-next)
+ 1. [Introduction](https://github.com/Spriteware/neural-network#introduction) 
+ 2. [Basic example](https://github.com/Spriteware/neural-network#basic-example)
+ 3. [Data example](https://github.com/Spriteware/neural-network#data-example)
+ 4. [Helpers for creating a dataset](https://github.com/Spriteware/neural-network#helpers-for-creating-a-dataset) 
+ 5. [What's next](https://github.com/Spriteware/neural-network#whats-next)
 
 ## 1 • Introduction
 
