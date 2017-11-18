@@ -8,11 +8,11 @@
 
 Summary:
 
- 1. [Introduction](https://github.com/Spriteware/neural-network#introduction) 
- 2. [Basic example](https://github.com/Spriteware/neural-network#basic-example)
- 3. [Data example](https://github.com/Spriteware/neural-network#data-example)
- 4. [Helpers for creating a dataset](https://github.com/Spriteware/neural-network#helpers-for-creating-a-dataset) 
- 5. [What's next](https://github.com/Spriteware/neural-network#whats-next)
+ 1. [Introduction](https://github.com/Spriteware/neural-network#1--introduction) 
+ 2. [Basic example](https://github.com/Spriteware/neural-network#2--basic-example)
+ 3. [Data example](https://github.com/Spriteware/neural-network#3--data-example)
+ 4. [Helpers for creating a dataset](https://github.com/Spriteware/neural-network#4--helpers-for-creating-a-dataset) 
+ 5. [What's next](https://github.com/Spriteware/neural-network#5--whats-next)
 
 ## 1 • Introduction
 
@@ -108,7 +108,7 @@ brain.backpropagate(targets);
 
 ```
 
-## 2 • Training data example 
+## 3 • Training data example 
 The training looks like a CSV file. Except that it is not. Every `inputs/targets` couple is separated by a `;`. `inputs `and `targets` are separated by a `:`. `inputs` or `targets` values are seperated by a `space`. Here is an example:
 ```
 input1 input2 input3 input4 : target1 target2 ;
@@ -124,7 +124,7 @@ var training_data_imported = "0 0.004012032080192407 0 0.004012032080192407 : 6.
 ";
 ```
 
-## 3 • Helpers for creating a dataset 
+## 4 • Helpers for creating a dataset 
 There are a few helpers functions if you want to generate your dataset meanwhile you train (or not) your neural network. They are under `Utils.static.xxx` and you can call them in your script or your console.
 ```javascript
 
@@ -142,7 +142,7 @@ Utils.static.exportTrainingData();
 Utils.static.clearTrainingData();
 ```
 
-## 4 • What's next?
+## 5 • What's next?
 
 And that's it. 
 You can check my other github repo "[Spriteware/machinelearning](https://github.com/Spriteware/machinelearning)" to see more implementations examples. 
