@@ -1,4 +1,4 @@
-# A up-to-date implementation of a Neural Network in JavaScript 
+# An up-to-date implementation of a Neural Network in JavaScript 
 
 > This library provides neural networks models that can be trained and
 > visualized with various optimizers, into its own thread. You can see
