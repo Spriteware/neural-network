@@ -20,8 +20,8 @@ const _WORKER_TRAINING_OVER = 1;
 const _ERROR_VALUE_TOO_HIGH = 100000;
 const _WEIGHT_VALUE_TOO_HIGH = 10000;
 
-const _CANVAS_GRAPH_WIDTH = 800;
-const _CANVAS_GRAPH_HEIGHT = 100;
+const _CANVAS_GRAPH_DEFAULT_WIDTH = 600;
+const _CANVAS_GRAPH_DEFAULT_HEIGHT = 100;
 const _CANVAS_GRAPH_WINDOW_FACTOR = 1 / 0.9;
 const _CANVAS_GRAPH_SMOOTH_FACTOR = 1 / 20;
 const _CANVAS_GRAPH_SEPARATE_EPOCHS_THRESHOLD = 20;
@@ -814,9 +814,9 @@ Network.prototype.train = function(params) {
     if (!params)
         throw new NetException("Invalid parameters object for training", {params: params});
 
-    var training_data = params.training_set || undefined;
-    var validation_data = params.validation_set || [];
-    var test_data = params.test_set || [];
+    var training_data = params.trainingSet || undefined;
+    var validation_data = params.validationSet || [];
+    var test_data = params.testSet || [];
 
     var epochs = params.epochs || undefined;
 
@@ -841,6 +841,8 @@ Network.prototype.train = function(params) {
 
     // Create visualisation (these one are also behond the scope)
     var container, graph, graph_ctx, text_output;
+    var canvas_width = params.canvasWidth ? params.canvasWidth : _CANVAS_GRAPH_DEFAULT_WIDTH;
+    var canvas_height = params.canvasHeight ? params.canvasHeight : _CANVAS_GRAPH_DEFAULT_HEIGHT;
     var scaled_width;
 
     if (params.visualize === true)
@@ -850,8 +852,8 @@ Network.prototype.train = function(params) {
         container.setAttribute("style", "margin: 10px;");
 
         graph = document.createElement("canvas");
-        graph.setAttribute("width", _CANVAS_GRAPH_WIDTH);
-        graph.setAttribute("height", _CANVAS_GRAPH_HEIGHT);
+        graph.setAttribute("width", canvas_width);
+        graph.setAttribute("height", canvas_height);
         container.appendChild( graph );
 
         // Create global error mean output
@@ -860,13 +862,13 @@ Network.prototype.train = function(params) {
 
         // We don't want to display too much data futilely
         if (gather_all)
-            scaled_width = _CANVAS_GRAPH_WIDTH / (epochs * training_data.length);
+            scaled_width = canvas_width / (epochs * training_data.length);
         else
-            scaled_width = _CANVAS_GRAPH_WIDTH / epochs;
+            scaled_width = canvas_width / epochs;
 
         graph_ctx = graph.getContext("2d");
-        graph_ctx.translate(0, _CANVAS_GRAPH_HEIGHT);
-        graph_ctx.scale(scaled_width, - _CANVAS_GRAPH_HEIGHT);
+        graph_ctx.translate(0, canvas_height);
+        graph_ctx.scale(scaled_width, - canvas_height);
         // graph_ctx.scale(1, - _CANVAS_GRAPH_HEIGHT);
         graph_ctx.globalAlpha = 0.8;
         graph_ctx.lineWidth = 0.03;
@@ -932,29 +934,29 @@ Network.prototype.train = function(params) {
                 var validation = new Stats(e.data.validation_stats.losses, e.data.validation_stats.epoch_mean_loss, e.data.validation_stats.global_mean_loss);
                 var test = new Stats(e.data.test_stats.losses, e.data.test_stats.epoch_mean_loss, e.data.test_stats.global_mean_loss);
 
-                var smooth_size = _CANVAS_GRAPH_WIDTH * _CANVAS_GRAPH_SMOOTH_FACTOR;
+                var smooth_size = canvas_width * _CANVAS_GRAPH_SMOOTH_FACTOR;
 
                 ////////////////////////////
 
-                graph_ctx.clearRect(0, 0, _CANVAS_GRAPH_WIDTH / scaled_width, 1);
+                graph_ctx.clearRect(0, 0, canvas_width / scaled_width, 1);
 
                 // Graphically separate epochs (only with a small amount of epochs)
                 if (epochs <= _CANVAS_GRAPH_SEPARATE_EPOCHS_THRESHOLD) {
                     graph_ctx.fillStyle = "#c7cbe0";
                     for (var i = 1; i < epochs; i++)
-                        graph_ctx.fillRect(i * _CANVAS_GRAPH_WIDTH / scaled_width / epochs, 0, 1 / scaled_width, 1);
+                        graph_ctx.fillRect(i * canvas_width / scaled_width / epochs, 0, 1 / scaled_width, 1);
                 }
                 
                 // Display the training set losses curve
-                display_curves(training.losses.average(_CANVAS_GRAPH_WIDTH), training.size, true, false, _COLOR_ASPHALT, _COLOR_BLUE);
+                display_curves(training.losses.average(canvas_width), training.size, true, false, _COLOR_ASPHALT, _COLOR_BLUE);
                 
                 // Display smoother mean if necessary
                 if (gather_all)
-                    display_curves(training.losses.average(_CANVAS_GRAPH_WIDTH * _CANVAS_GRAPH_SMOOTH_FACTOR), training.size, false, true, _COLOR_ASPHALT, _COLOR_BLUE);
+                    display_curves(training.losses.average(canvas_width * _CANVAS_GRAPH_SMOOTH_FACTOR), training.size, false, true, _COLOR_ASPHALT, _COLOR_BLUE);
 
                 // Display the validation set and test set smoothly 
-                display_curves(validation.losses.average(_CANVAS_GRAPH_WIDTH), training.size, false, true, "pink", _COLOR_PURPLE);
-                display_curves(test.losses.average(_CANVAS_GRAPH_WIDTH), training.size, false, true, "pink", _COLOR_GREEN);
+                display_curves(validation.losses.average(canvas_width), training.size, false, true, "pink", _COLOR_PURPLE);
+                display_curves(test.losses.average(canvas_width), training.size, false, true, "pink", _COLOR_GREEN);
 
                 // Update output text display
                 text_output.innerHTML = "epoch " + (e.data.curr_epoch+1) + "/" + epochs + " | curr error mean: " + training.epoch_mean_loss.toFixed(5);
