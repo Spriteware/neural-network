@@ -879,7 +879,7 @@ Network.prototype.train = function(params) {
             if (!data || data.length === 0)
                 return;
 
-            var ratio = window_width / data.length;
+            var ratio = window_width / (data.length-1);
             var l = data.length;
 
             graph_ctx.fillStyle = fill_style;
@@ -891,7 +891,8 @@ Network.prototype.train = function(params) {
                 graph_ctx.lineTo(i * ratio, Math.sqrt(data[i] + _EPSILON) * _CANVAS_GRAPH_WINDOW_FACTOR);
 
             if (fill) {
-                graph_ctx.lineTo(i * ratio, 0);
+                // graph_ctx.lineTo(i * ratio, Math.sqrt(data[i-1] + _EPSILON) * _CANVAS_GRAPH_WINDOW_FACTOR);
+                graph_ctx.lineTo((i-1) * ratio, 0);
                 graph_ctx.closePath();
                 graph_ctx.fill();
             }
