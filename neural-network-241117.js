@@ -821,7 +821,7 @@ Network.prototype.train = function(params) {
     var epochs = params.epochs || undefined;
 
     if (!training_data || training_data.length <= 0)
-        throw new NetException("Invalid raw training data (object) passed in parameters", {trainingSet: training_data});
+        throw new NetException("Invalid raw training data (object)", {training_data: training_data});
 
     if (!epochs || isNaN(epochs))
         throw new NetException("Invalid epochs number for training", {epochs: epochs});
