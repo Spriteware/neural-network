@@ -15,7 +15,7 @@ Summary:
 
 ## 1 • Introduction
 
-The main idea was to do something that can **help to visualize the network and its evolutuion** through backpropagation. Here's an example:
+The main idea was to do something that can **help to visualize the network and its evolution** through backpropagation. Here's an example:
 
 ![Visualization example](https://franpapers.com/wp-content/uploads/2017/10/Capture.png)
 
